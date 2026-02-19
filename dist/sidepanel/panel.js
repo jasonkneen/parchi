@@ -7867,7 +7867,7 @@ var STORAGE_KEYS = {
   subscriptionCheckedAt: "convexSubscriptionCheckedAt",
   convexUrl: "convexUrl"
 };
-var CONVEX_DEPLOYMENT_URL = String(true ? "https://energetic-firefly-297.convex.cloud" : "").trim();
+var CONVEX_DEPLOYMENT_URL = String(true ? "" : "").trim();
 var runtimeConvexUrl = CONVEX_DEPLOYMENT_URL;
 var convexClient = runtimeConvexUrl ? new ConvexHttpClient(runtimeConvexUrl) : null;
 var resolveStoredConvexUrl = async () => {
