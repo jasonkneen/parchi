@@ -60,8 +60,10 @@ const loadBuildEnv = () => {
 loadBuildEnv();
 
 const convexUrl = String(process.env.CONVEX_URL || '').trim();
+const perfDebug = (process.env.PERF_DEBUG || '').toLowerCase() === 'true';
 const buildDefines = {
   __CONVEX_URL__: JSON.stringify(convexUrl),
+  __PERF_DEBUG__: JSON.stringify(perfDebug),
 };
 
 const ensureDir = (dir) => fs.mkdirSync(dir, { recursive: true });
@@ -116,9 +118,12 @@ const run = async () => {
     define: buildDefines,
   });
 
-  // Build content script as IIFE (content scripts don't support ESM)
+  // Build content scripts as IIFE (content scripts don't support ESM)
   await esbuild.build({
-    entryPoints: [path.join(extensionRoot, 'content.ts')],
+    entryPoints: [
+      path.join(extensionRoot, 'content.ts'),
+      path.join(extensionRoot, 'content-recording.ts'),
+    ],
     outdir: distDir,
     outbase: extensionRoot,
     bundle: true,
@@ -139,6 +144,7 @@ const run = async () => {
       path.join(rootDir, 'tests', 'e2e', 'test-browser-tools.ts'),
       path.join(rootDir, 'tests', 'api', 'run-api-tests.ts'),
       path.join(rootDir, 'tests', 'relay', 'run-relay-tests.ts'),
+      path.join(rootDir, 'tests', 'perf', 'run-perf-profile.ts'),
     ],
     outdir: distDir,
     outbase: rootDir,

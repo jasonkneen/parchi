@@ -5,6 +5,8 @@ import { getActiveTab } from '../../../utils/active-tab.js';
 import { SidePanelUI } from '../core/panel-ui.js';
 import type { UsagePayload } from '../types/panel-types.js';
 
+const MAX_DISPLAY_HISTORY = 400;
+
 const truncate = (value: string, max = 12000) => {
   const text = String(value || '');
   if (text.length <= max) return text;
@@ -56,6 +58,28 @@ const sanitizeForMessaging = (value: any, depth = 0): any => {
   return String(value);
 };
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const isMissingReceiverError = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  return /Receiving end does not exist|Could not establish connection/i.test(message);
+};
+
+const sendRuntimeMessageWithRetry = async (payload: Record<string, unknown>, retries = 1) => {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await chrome.runtime.sendMessage(payload);
+    } catch (error) {
+      if (attempt >= retries || !isMissingReceiverError(error)) {
+        throw error;
+      }
+      attempt += 1;
+      await sleep(250);
+    }
+  }
+};
+
 (SidePanelUI.prototype as any).sendMessage = async function sendMessage() {
   const userMessage = this.elements.userInput.value.trim();
   if (!userMessage) return;
@@ -102,6 +126,9 @@ const sanitizeForMessaging = (value: any, depth = 0): any => {
   const displayEntry = createMessage({ role: 'user', content: userMessage });
   if (displayEntry) {
     this.displayHistory.push(displayEntry);
+    if (this.displayHistory.length > MAX_DISPLAY_HISTORY) {
+      this.displayHistory.splice(0, this.displayHistory.length - MAX_DISPLAY_HISTORY);
+    }
   }
 
   const contextEntry = createMessage({ role: 'user', content: fullMessage });
@@ -118,13 +145,19 @@ const sanitizeForMessaging = (value: any, depth = 0): any => {
   try {
     // Avoid sending huge tool payloads; also ensures errors are caught (promise-based APIs).
     const sendableHistory = sanitizeForMessaging(this.contextHistory || []);
-    const response = await chrome.runtime.sendMessage({
+    const payload: Record<string, unknown> = {
       type: 'user_message',
       message: fullMessage,
       conversationHistory: sendableHistory,
       selectedTabs: selectedTabsPayload,
       sessionId: this.sessionId,
-    });
+    };
+    if (this.pendingRecordedContext) {
+      payload.recordedContext = this.pendingRecordedContext;
+      this.pendingRecordedContext = null;
+      this.hideRecordedContextBadge?.();
+    }
+    const response = await sendRuntimeMessageWithRetry(payload);
     if (response?.sessionId && typeof response.sessionId === 'string') {
       this.sessionId = response.sessionId;
     }
@@ -135,6 +168,8 @@ const sanitizeForMessaging = (value: any, depth = 0): any => {
     this.stopRunTimer?.();
     this.stopWatchdog?.();
     this.pendingTurnDraft = null;
+    this.pendingRecordedContext = null;
+    this.hideRecordedContextBadge?.();
     this.updateStatus('Error: ' + error.message, 'error');
     this.elements.composer?.classList.remove('running');
     this.displayAssistantMessage('Sorry, an error occurred: ' + error.message);
@@ -226,6 +261,32 @@ const sanitizeForMessaging = (value: any, depth = 0): any => {
     this.updateUsageStats(normalizedUsage);
   }
   const messageMeta = this.buildMessageMeta(normalizedUsage, modelLabel);
+  const selectedReportImages = typeof this.getSelectedReportImagesForExport === 'function'
+    ? this.getSelectedReportImagesForExport()
+    : [];
+  const buildReportImagesHtml = () => {
+    if (!Array.isArray(selectedReportImages) || selectedReportImages.length === 0) return '';
+    const cards = selectedReportImages
+      .map((image: any, index: number) => {
+        const label = this.escapeHtml(image.title || image.url || image.id || `Image ${index + 1}`);
+        const src = String(image.dataUrl || '');
+        if (!src) return '';
+        return `
+          <figure class="report-image-card">
+            <img src="${src}" alt="${label}" loading="lazy" />
+            <figcaption>${label}</figcaption>
+          </figure>
+        `;
+      })
+      .join('');
+    if (!cards) return '';
+    return `
+      <div class="report-images-inline">
+        <div class="report-images-inline-title">Selected report images</div>
+        <div class="report-images-inline-grid">${cards}</div>
+      </div>
+    `;
+  };
 
   const assistantEntry = createMessage({
     role: 'assistant',
@@ -234,6 +295,9 @@ const sanitizeForMessaging = (value: any, depth = 0): any => {
   });
   if (assistantEntry) {
     this.displayHistory.push(assistantEntry);
+    if (this.displayHistory.length > MAX_DISPLAY_HISTORY) {
+      this.displayHistory.splice(0, this.displayHistory.length - MAX_DISPLAY_HISTORY);
+    }
   }
 
   if (streamedContainer) {
@@ -311,6 +375,16 @@ const sanitizeForMessaging = (value: any, depth = 0): any => {
         streamEventsEl.appendChild(textEvent);
       }
 
+      const reportImagesHtml = buildReportImagesHtml();
+      if (reportImagesHtml) {
+        const existing = streamEventsEl.querySelector('.report-images-inline');
+        existing?.remove();
+        const reportBlock = document.createElement('div');
+        reportBlock.className = 'stream-event stream-event-report-images';
+        reportBlock.innerHTML = reportImagesHtml;
+        streamEventsEl.appendChild(reportBlock);
+      }
+
       // Collapse tool rows by default with a summary toggle
       const toolRows = streamEventsEl.querySelectorAll('.tool-row');
       if (toolRows.length > 0) {
@@ -341,6 +415,8 @@ const sanitizeForMessaging = (value: any, depth = 0): any => {
     this.stopRunTimer?.();
     this.pendingToolCount = 0;
     this.updateActivityState();
+    this.nullifyFinalizedToolData();
+    this.pruneOldChatTurns();
     this.persistHistory();
     this.updateChatEmptyState();
     return;
@@ -374,6 +450,11 @@ const sanitizeForMessaging = (value: any, depth = 0): any => {
     html += `<div class="message-content markdown-body">${renderedContent}</div>`;
   }
 
+  const reportImagesHtml = buildReportImagesHtml();
+  if (reportImagesHtml) {
+    html += reportImagesHtml;
+  }
+
   messageDiv.innerHTML = html;
 
   const thinkingHeader = messageDiv.querySelector('.thinking-header');
@@ -399,6 +480,48 @@ const sanitizeForMessaging = (value: any, depth = 0): any => {
   this.stopRunTimer?.();
   this.pendingToolCount = 0;
   this.updateActivityState();
+  this.nullifyFinalizedToolData();
+  this.pruneOldChatTurns();
   this.persistHistory();
   this.updateChatEmptyState();
+};
+
+const MAX_CHAT_TURNS = 100;
+const PRUNE_PLACEHOLDER_CLASS = 'chat-pruned-placeholder';
+
+(SidePanelUI.prototype as any).pruneOldChatTurns = function pruneOldChatTurns() {
+  const container = this.elements.chatMessages;
+  if (!container) return;
+
+  const turns = Array.from(container.querySelectorAll('.chat-turn'));
+  const excess = turns.length - MAX_CHAT_TURNS;
+  if (excess <= 0) return;
+
+  // Preserve scroll position relative to bottom
+  const scrollBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+
+  let removed = 0;
+  for (let i = 0; i < turns.length && removed < excess; i++) {
+    const turn = turns[i] as HTMLElement;
+    // Never remove a turn that's still streaming
+    if (turn.querySelector('.streaming')) continue;
+    turn.remove();
+    removed++;
+  }
+
+  if (removed > 0) {
+    // Insert or update placeholder at top
+    let placeholder = container.querySelector(`.${PRUNE_PLACEHOLDER_CLASS}`) as HTMLElement | null;
+    if (!placeholder) {
+      placeholder = document.createElement('div');
+      placeholder.className = PRUNE_PLACEHOLDER_CLASS;
+      container.prepend(placeholder);
+    }
+    const totalPruned = Number(placeholder.dataset.count || 0) + removed;
+    placeholder.dataset.count = String(totalPruned);
+    placeholder.textContent = `${totalPruned} earlier messages hidden`;
+
+    // Restore scroll position relative to bottom to prevent visual jump
+    container.scrollTop = container.scrollHeight - container.clientHeight - scrollBottom;
+  }
 };

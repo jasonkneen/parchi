@@ -15,20 +15,52 @@ export type SDKModelSettings = {
   useProxy?: boolean;
   proxyBaseUrl?: string;
   proxyAuthToken?: string;
-  proxyProvider?: 'openai' | 'anthropic' | 'kimi';
+  proxyProvider?: 'openai' | 'anthropic' | 'kimi' | 'openrouter';
 };
+
+/**
+ * Auto-prefix bare model names for OpenRouter (requires `provider/model` format).
+ */
+export function normalizeOpenRouterModelId(modelId: string): string {
+  let model = modelId.trim();
+  if (/^(parchi|openrouter)\//i.test(model)) {
+    const parts = model.split('/');
+    if (parts.length >= 2) {
+      model = parts.slice(1).join('/');
+    }
+  }
+  if (!model || model.includes('/')) return model;
+  const lower = model.toLowerCase();
+  if (lower.startsWith('gpt-') || lower.startsWith('o1') || lower.startsWith('o3') || lower.startsWith('o4'))
+    return `openai/${model}`;
+  if (lower.startsWith('claude')) return `anthropic/${model}`;
+  if (lower.startsWith('gemini')) return `google/${model}`;
+  if (lower.startsWith('deepseek')) return `deepseek/${model}`;
+  if (lower.startsWith('qwen')) return `qwen/${model}`;
+  if (lower.includes('llama')) return `meta-llama/${model}`;
+  return model;
+}
 
 export function resolveLanguageModel(settings: SDKModelSettings) {
   const provider = settings.provider || 'openai';
-  const modelId = settings.model || 'gpt-4o';
+  const modelId = String(settings.model || '').trim();
   const apiKey = settings.apiKey || '';
   const extraHeaders =
     settings.extraHeaders && typeof settings.extraHeaders === 'object' ? settings.extraHeaders : undefined;
 
+  if (!modelId) {
+    throw new Error('No model configured. Open Settings and choose a model before running.');
+  }
+
   if (settings.useProxy && settings.proxyBaseUrl && settings.proxyAuthToken) {
     const normalizedBase = settings.proxyBaseUrl.replace(/\/+$/, '');
     const proxyProvider =
-      settings.proxyProvider || (provider === 'anthropic' || provider === 'kimi' ? 'anthropic' : 'openai');
+      settings.proxyProvider ||
+      (provider === 'anthropic' || provider === 'kimi'
+        ? 'anthropic'
+        : provider === 'openrouter' || provider === 'parchi'
+          ? 'openrouter'
+          : 'openai');
 
     if (proxyProvider === 'anthropic') {
       const anthropicProxy = createAnthropic({
@@ -52,6 +84,22 @@ export function resolveLanguageModel(settings: SDKModelSettings) {
         },
       });
       return kimiProxy(modelId);
+    }
+
+    if (proxyProvider === 'openrouter') {
+      const openRouterProxy = createOpenAICompatible({
+        name: 'openrouter-proxy',
+        apiKey: settings.proxyAuthToken,
+        // Convex deployments in the wild commonly route OpenRouter via /v1.
+        // Keeping /v1 in the client path avoids HTML fallthrough on older routes.
+        baseURL: `${normalizedBase}/ai-proxy/openrouter/v1`,
+        headers: {
+          ...extraHeaders,
+          'HTTP-Referer': 'https://parchi.app',
+          'X-Title': 'Parchi',
+        },
+      });
+      return openRouterProxy(normalizeOpenRouterModelId(modelId));
     }
 
     const openAiProxy = createOpenAICompatible({
@@ -87,6 +135,20 @@ export function resolveLanguageModel(settings: SDKModelSettings) {
       headers: extraHeaders,
     });
     return kimiProvider(modelId);
+  }
+
+  if (provider === 'openrouter' || provider === 'parchi') {
+    const openRouterProvider = createOpenAICompatible({
+      name: provider === 'parchi' ? 'parchi-managed' : 'openrouter',
+      apiKey,
+      baseURL: 'https://openrouter.ai/api/v1',
+      headers: {
+        ...extraHeaders,
+        'HTTP-Referer': 'https://parchi.app',
+        'X-Title': 'Parchi',
+      },
+    });
+    return openRouterProvider(normalizeOpenRouterModelId(modelId));
   }
 
   if (provider === 'custom') {

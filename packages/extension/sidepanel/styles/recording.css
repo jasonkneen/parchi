@@ -1,0 +1,345 @@
+/* ============================================================================
+   Recording — Context capture UI
+   ============================================================================ */
+
+/* Record button */
+.record-btn {
+  color: var(--text-muted);
+  transition: color 0.2s;
+}
+
+.record-btn:hover {
+  color: var(--text-secondary);
+}
+
+.record-btn.recording {
+  color: hsl(0, 70%, 55%);
+  animation: recordPulse 1.2s ease-in-out infinite;
+}
+
+@keyframes recordPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* Recording timer bar */
+.recording-timer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  color: hsl(0, 70%, 65%);
+  background: hsla(0, 70%, 55%, 0.08);
+  border-radius: 8px;
+  margin: 0 12px 4px;
+}
+
+.recording-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: hsl(0, 70%, 55%);
+  animation: recordPulse 1.2s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+.recording-time {
+  white-space: nowrap;
+}
+
+/* Context badge (shown in composer when recording is attached) */
+.recorded-context-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px 3px 10px;
+  border-radius: 12px;
+  background: hsla(0, 70%, 55%, 0.1);
+  border: 1px solid hsla(0, 70%, 55%, 0.2);
+  font-size: 11px;
+  color: hsl(0, 70%, 65%);
+  margin: 4px 0;
+}
+
+.recorded-context-label {
+  white-space: nowrap;
+}
+
+.recorded-context-remove {
+  background: none;
+  border: none;
+  color: hsl(0, 70%, 65%);
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0.6;
+  transition: opacity 0.15s;
+}
+
+.recorded-context-remove:hover {
+  opacity: 1;
+}
+
+/* Image picker modal */
+.image-picker-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.image-picker-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.image-picker-content {
+  position: relative;
+  z-index: 1;
+  background: var(--card);
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  width: 92%;
+  max-width: 520px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.image-picker-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border);
+}
+
+.image-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  padding: 12px;
+  overflow-y: auto;
+  max-height: 55vh;
+}
+
+.image-picker-cell {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  border-radius: 6px;
+  overflow: hidden;
+  cursor: pointer;
+  border: 2px solid transparent;
+  transition: border-color 0.15s;
+}
+
+.image-picker-cell:hover {
+  border-color: var(--text-muted);
+}
+
+.image-picker-cell.selected {
+  border-color: var(--accent);
+}
+
+.image-picker-cell img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.image-picker-timestamp {
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  font-size: 9px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.6);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.image-picker-badge {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.image-picker-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+}
+
+.review-footer-right {
+  display: flex;
+  gap: 8px;
+}
+
+/* ── Review Tabs ─────────────────────────────────────────────────────── */
+
+.review-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  padding: 0 16px;
+}
+
+.review-tab {
+  flex: 1;
+  padding: 8px 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  text-align: center;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.review-tab:hover {
+  color: var(--text-secondary);
+}
+
+.review-tab.active {
+  color: var(--text-primary);
+  border-bottom-color: var(--accent);
+}
+
+.review-panel {
+  overflow-y: auto;
+  max-height: 55vh;
+}
+
+.review-action-count {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+/* ── Action Timeline ─────────────────────────────────────────────────── */
+
+.action-timeline {
+  padding: 8px 12px;
+}
+
+.action-timeline-list {
+  position: relative;
+  padding-left: 8px;
+}
+
+/* Vertical connecting line */
+.action-timeline-list::before {
+  content: "";
+  position: absolute;
+  left: 14px;
+  top: 8px;
+  bottom: 8px;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* URL group separator */
+.action-timeline-separator {
+  font-size: 10px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  color: var(--text-muted);
+  padding: 6px 0 4px 26px;
+  opacity: 0.7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Single action node */
+.action-timeline-node {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 5px 0;
+  position: relative;
+  transition: opacity 0.15s;
+}
+
+.action-timeline-node.excluded {
+  opacity: 0.3;
+}
+
+.action-node-icon {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  color: var(--text-muted);
+  margin-top: 1px;
+}
+
+.action-node-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.action-node-primary {
+  font-size: 11px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.action-node-detail {
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.action-node-time {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  color: var(--text-muted);
+  margin-top: 1px;
+}
+
+.action-node-toggle {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.action-node-toggle input[type="checkbox"] {
+  width: 12px;
+  height: 12px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}

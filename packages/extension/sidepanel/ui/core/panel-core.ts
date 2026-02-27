@@ -33,6 +33,7 @@ const autoResizeTextArea = (textarea: HTMLTextAreaElement | null, maxHeight: num
 
 (SidePanelUI.prototype as any).init = async function init() {
   try {
+    this.connectLifecyclePort();
     this.setupEventListeners();
     this.setupPlanDrawer();
     this.setupResizeObserver();
@@ -46,10 +47,43 @@ const autoResizeTextArea = (textarea: HTMLTextAreaElement | null, maxHeight: num
     this.fetchAvailableModels();
     this.updateChatEmptyState?.();
     this.initMascotBubble?.();
+    this.initSessionTabsOrb?.();
   } catch (error) {
     console.error('[Parchi] init() failed:', error);
     this.updateStatus('Initialization failed - check console', 'error');
   }
+};
+
+(SidePanelUI.prototype as any).connectLifecyclePort = function connectLifecyclePort() {
+  if (this.lifecyclePort) return;
+  try {
+    const port = chrome.runtime.connect({ name: 'sidepanel-lifecycle' });
+    this.lifecyclePort = port;
+    port.onDisconnect.addListener(() => {
+      if (this.lifecyclePort === port) {
+        this.lifecyclePort = null;
+      }
+    });
+  } catch (error) {
+    console.warn('[Parchi] Failed to connect sidepanel lifecycle port:', error);
+  }
+};
+
+(SidePanelUI.prototype as any).requestRunStop = function requestRunStop(note = 'Stopped') {
+  if (!this.lifecyclePort) {
+    this.connectLifecyclePort?.();
+  }
+  const payload = {
+    type: 'stop_run',
+    sessionId: this.sessionId,
+    note,
+  };
+  try {
+    void chrome.runtime.sendMessage(payload);
+  } catch {}
+  try {
+    this.lifecyclePort?.postMessage(payload);
+  } catch {}
 };
 
 (SidePanelUI.prototype as any).setupEventListeners = function setupEventListeners() {
@@ -57,6 +91,12 @@ const autoResizeTextArea = (textarea: HTMLTextAreaElement | null, maxHeight: num
     onOpen: () => this.openSettingsPanel(),
     onClose: () => this.closeSidebar(),
   });
+
+  const stopOnClose = () => {
+    this.requestRunStop('Stopped (panel closed)');
+  };
+  window.addEventListener('pagehide', stopOnClose);
+  window.addEventListener('beforeunload', stopOnClose);
 
   this.elements.startNewSessionBtn?.addEventListener('click', () => this.startNewSession());
   this.elements.newSessionFab?.addEventListener('click', () => this.startNewSession());
@@ -75,6 +115,26 @@ const autoResizeTextArea = (textarea: HTMLTextAreaElement | null, maxHeight: num
     const query = (this.elements.historySearchInput?.value || '').trim();
     this.filterHistoryList(query);
   }, 150));
+
+  // Balance popover on status bar click
+  const statusBar = document.getElementById('statusBar');
+  const balancePopover = document.getElementById('balancePopover');
+  const balancePopoverClose = document.getElementById('balancePopoverClose');
+  if (statusBar && balancePopover) {
+    statusBar.addEventListener('click', () => this.toggleBalancePopover?.());
+    balancePopoverClose?.addEventListener('click', (e: Event) => {
+      e.stopPropagation();
+      balancePopover.classList.add('hidden');
+    });
+    // Close popover when clicking outside
+    document.addEventListener('click', (e: Event) => {
+      if (!balancePopover.classList.contains('hidden') &&
+          !balancePopover.contains(e.target as Node) &&
+          !statusBar.contains(e.target as Node)) {
+        balancePopover.classList.add('hidden');
+      }
+    });
+  }
 
   // Provider change
   this.elements.provider?.addEventListener('change', () => {
@@ -110,6 +170,8 @@ const autoResizeTextArea = (textarea: HTMLTextAreaElement | null, maxHeight: num
   this.elements.settingsTabNetworkBtn?.addEventListener('click', () => this.switchSettingsTab('network'));
   this.elements.settingsTabPromptBtn?.addEventListener('click', () => this.switchSettingsTab('prompt'));
   this.elements.settingsTabProfilesBtn?.addEventListener('click', () => this.switchSettingsTab('profiles'));
+  this.elements.settingsTabUsageBtn?.addEventListener('click', () => this.switchSettingsTab('usage'));
+  document.getElementById('usageRefreshBtn')?.addEventListener('click', () => this.refreshUsageTab?.());
   this.elements.createProfileBtn?.addEventListener('click', () => this.createProfileFromInput());
   this.elements.agentGrid?.addEventListener('click', (event) => {
     const deleteBtn = (event.target as HTMLElement | null)?.closest('.agent-card-delete') as HTMLElement | null;
@@ -207,20 +269,21 @@ export PARCHI_RELAY_PORT="${port}"`;
   // Send message (or stop if running)
   this.elements.sendBtn?.addEventListener('click', () => {
     if (this.elements.composer?.classList.contains('running')) {
-      try {
-        void chrome.runtime.sendMessage({ type: 'stop_run', sessionId: this.sessionId });
-      } catch {}
+      this.requestRunStop('Stopped by user');
       this.stopWatchdog?.();
       this.stopThinkingTimer?.();
       this.stopRunTimer?.();
       this.elements.composer?.classList.remove('running');
       this.pendingTurnDraft = null;
+      this.pendingRecordedContext = null;
+      this.hideRecordedContextBadge?.();
       this.pendingToolCount = 0;
       this.isStreaming = false;
       this.activeToolName = null;
       this.updateActivityState();
       this.finishStreamingMessage();
       this.clearErrorBanner?.();
+      this.insertStoppedDivider();
       this.updateStatus('Stopped', 'warning');
     } else {
       this.sendMessage();
@@ -258,12 +321,27 @@ export PARCHI_RELAY_PORT="${port}"`;
   this.elements.modelSelect?.addEventListener('change', () => {
     void this.handleModelSelectChange();
   });
+  this.elements.setupAccessBtn?.addEventListener('click', () => {
+    void this.handleSetupAccessClick?.();
+  });
 
   // File upload
   this.elements.fileBtn?.addEventListener('click', () => {
     this.elements.fileInput?.click();
   });
   this.elements.fileInput?.addEventListener('change', (event) => this.handleFileSelection(event));
+
+  // Recording
+  this.elements.recordBtn?.addEventListener('click', () => {
+    if (this.recordingState.status === 'idle') {
+      this.startRecording();
+    } else if (this.recordingState.status === 'recording') {
+      this.stopRecording();
+    }
+  });
+  this.elements.recordedContextRemove?.addEventListener('click', () => {
+    this.removeRecordedContext();
+  });
 
   // Zoom controls
   this.elements.zoomInBtn?.addEventListener('click', () => this.adjustUiZoom(0.05));
@@ -272,6 +350,12 @@ export PARCHI_RELAY_PORT="${port}"`;
   this.elements.uiZoom?.addEventListener('input', () => {
     const value = Number.parseFloat(this.elements.uiZoom.value || '1');
     this.applyUiZoom(value);
+  });
+  this.elements.fontPreset?.addEventListener('change', () => {
+    this.applyTypography(this.elements.fontPreset?.value || 'default', this.fontStylePreset || 'normal');
+  });
+  this.elements.fontStylePreset?.addEventListener('change', () => {
+    this.applyTypography(this.fontPreset || 'default', this.elements.fontStylePreset?.value || 'normal');
   });
 
   // Tab selector
@@ -291,7 +375,75 @@ export PARCHI_RELAY_PORT="${port}"`;
   // Stop/reset is now handled by the send button above
 
   // Profile editor controls
-  this.elements.profileEditorProvider?.addEventListener('change', () => this.toggleProfileEditorEndpoint());
+  this.elements.profileEditorProvider?.addEventListener('change', () => {
+    this.toggleProfileEditorEndpoint();
+    this.refreshModelCatalogForProfileEditor?.();
+  });
+
+  // Also refetch models when endpoint or API key changes (debounced)
+  const debouncedModelRefresh = debounce(() => this.refreshModelCatalogForProfileEditor?.(), 800);
+  this.elements.profileEditorEndpoint?.addEventListener('input', debouncedModelRefresh);
+  this.elements.profileEditorApiKey?.addEventListener('input', debouncedModelRefresh);
+
+  // Model picker: open on focus/click of model input
+  this.elements.profileEditorModel?.addEventListener('focus', () => this.showModelPicker?.());
+  this.elements.profileEditorModel?.addEventListener('click', () => this.showModelPicker?.());
+
+  // Model picker: filter as user types in filter input
+  document.getElementById('modelPickerFilter')?.addEventListener('input', (e: Event) => {
+    const value = (e.target as HTMLInputElement).value;
+    this.renderModelPickerList?.(value);
+  });
+
+  // Model picker: select on click
+  document.getElementById('modelPickerList')?.addEventListener('click', (e: Event) => {
+    const item = (e.target as HTMLElement).closest('.model-picker-item') as HTMLElement | null;
+    if (!item?.dataset.model) return;
+    if (this.elements.profileEditorModel) {
+      this.elements.profileEditorModel.value = item.dataset.model;
+    }
+    this.hideModelPicker?.();
+  });
+
+  // Model picker: close on outside click
+  document.addEventListener('mousedown', (e: MouseEvent) => {
+    const dropdown = document.getElementById('modelPickerDropdown');
+    if (!dropdown || dropdown.classList.contains('hidden')) return;
+    const pickerGroup = (e.target as HTMLElement)?.closest('.model-picker-group');
+    if (!pickerGroup) this.hideModelPicker?.();
+  });
+
+  // Model picker: keyboard navigation in filter
+  document.getElementById('modelPickerFilter')?.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      this.hideModelPicker?.();
+      this.elements.profileEditorModel?.focus();
+      return;
+    }
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const list = document.getElementById('modelPickerList');
+      if (!list) return;
+      const items = list.querySelectorAll('.model-picker-item');
+      if (!items.length) return;
+      const focused = list.querySelector('.model-picker-item.focused') as HTMLElement | null;
+      let idx = focused ? Array.from(items).indexOf(focused) : -1;
+      if (focused) focused.classList.remove('focused');
+      idx = e.key === 'ArrowDown' ? Math.min(idx + 1, items.length - 1) : Math.max(idx - 1, 0);
+      const next = items[idx] as HTMLElement;
+      next.classList.add('focused');
+      next.scrollIntoView({ block: 'nearest' });
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const focused = document.querySelector('#modelPickerList .model-picker-item.focused') as HTMLElement | null;
+      if (focused?.dataset.model && this.elements.profileEditorModel) {
+        this.elements.profileEditorModel.value = focused.dataset.model;
+        this.hideModelPicker?.();
+      }
+    }
+  });
+
   this.elements.profileEditorHeaders?.addEventListener('input', () => this.validateProfileEditorHeaders());
   this.elements.profileEditorTemperature?.addEventListener('input', () => {
     if (this.elements.profileEditorTemperatureValue) {
@@ -310,6 +462,12 @@ export PARCHI_RELAY_PORT="${port}"`;
   chrome.runtime.onMessage.addListener((message) => {
     if (isRuntimeMessage(message)) {
       this.handleRuntimeMessage(message);
+      return;
+    }
+    // Recording messages (not runtime messages — they have their own schema)
+    const recordingTypes = ['recording_tick', 'recording_complete', 'recording_context_ready', 'recording_error'];
+    if (message?.type && recordingTypes.includes(message.type)) {
+      this.handleRecordingMessage?.(message);
     }
   });
 
@@ -357,12 +515,22 @@ export PARCHI_RELAY_PORT="${port}"`;
   }
 };
 
+(SidePanelUI.prototype as any).insertStoppedDivider = function insertStoppedDivider() {
+  const el = document.createElement('div');
+  el.className = 'stopped-divider';
+  el.innerHTML = '<span>Stopped</span>';
+  this.elements.chatMessages?.appendChild(el);
+  this.scrollToBottom();
+};
+
 (SidePanelUI.prototype as any).recoverFromStuckState = function recoverFromStuckState() {
   this.stopWatchdog();
   this.stopThinkingTimer?.();
   this.stopRunTimer?.();
   this.elements.composer?.classList.remove('running');
   this.pendingTurnDraft = null;
+  this.pendingRecordedContext = null;
+  this.hideRecordedContextBadge?.();
   this.pendingToolCount = 0;
   this.isStreaming = false;
   this.activeToolName = null;
@@ -420,6 +588,8 @@ export PARCHI_RELAY_PORT="${port}"`;
       this.stopRunTimer?.();
       this.elements.composer?.classList.remove('running');
       this.pendingTurnDraft = null;
+      this.pendingRecordedContext = null;
+      this.hideRecordedContextBadge?.();
       this.pendingToolCount = 0;
       this.isStreaming = false;
       this.activeToolName = null;
@@ -433,6 +603,18 @@ export PARCHI_RELAY_PORT="${port}"`;
       this.updateStatus(message.note || 'Failed', 'error');
     } else if (phase === 'completed') {
       this.updateStatus(message.note || 'Ready', 'success');
+    } else if (phase === 'planning' || phase === 'executing' || phase === 'finalizing') {
+      // Surface non-terminal phases with retry counts
+      const phaseLabel = phase.charAt(0).toUpperCase() + phase.slice(1);
+      const retryInfo = message.attempts && message.maxRetries
+        ? (() => {
+            const parts: string[] = [];
+            if (message.attempts.api > 0) parts.push(`api ${message.attempts.api}/${message.maxRetries.api}`);
+            if (message.attempts.tool > 0) parts.push(`tool ${message.attempts.tool}/${message.maxRetries.tool}`);
+            return parts.length ? ` (retries: ${parts.join(', ')})` : '';
+          })()
+        : '';
+      this.updateStatus(`${phaseLabel}${retryInfo}`, 'active');
     } else if (phase) {
       this.updateStatus(message.note || phase, 'active');
     }
@@ -586,6 +768,16 @@ export PARCHI_RELAY_PORT="${port}"`;
       this.historyTurnMap.set(turnId, entry);
     }
 
+    // Cap historyTurnMap to prevent unbounded memory growth
+    if (this.historyTurnMap.size > 200) {
+      const iter = this.historyTurnMap.keys();
+      const excess = this.historyTurnMap.size - 200;
+      for (let i = 0; i < excess; i++) {
+        const key = iter.next().value;
+        if (key !== undefined) this.historyTurnMap.delete(key);
+      }
+    }
+
     this.displayAssistantMessage(message.content, message.thinking, message.usage, message.model);
     this.appendContextMessages(message.responseMessages, message.content, message.thinking);
     if (message.usage?.inputTokens) {
@@ -599,6 +791,8 @@ export PARCHI_RELAY_PORT="${port}"`;
     if (!this.isReplayingHistory) {
       this.pendingTurnDraft = null;
     }
+
+    void this.clearParchiRuntimeHealth?.();
 
     return;
   }
@@ -622,16 +816,42 @@ export PARCHI_RELAY_PORT="${port}"`;
     this.showErrorBanner(message.message, {
       category: (message as any).errorCategory,
       action: (message as any).action,
+      recoverable: (message as any).recoverable,
+    });
+    void this.setParchiRuntimeHealth?.({
+      level: 'error',
+      summary: String(message.message || 'Paid runtime failed.'),
+      detail: String((message as any).action || ''),
+      category: String((message as any).errorCategory || ''),
     });
     this.updateStatus('Error', 'error');
     return;
   }
   if (message.type === 'run_warning') {
     this.showErrorBanner(message.message);
+    const warningText = String(message.message || '');
+    if (warningText) {
+      const lower = warningText.toLowerCase();
+      if (lower.includes('model') || lower.includes('retrying') || lower.includes('unavailable')) {
+        void this.setParchiRuntimeHealth?.({
+          level: 'warning',
+          summary: warningText,
+        });
+      }
+    }
     return;
   }
   if (message.type === 'session_tabs_update') {
     this.handleSessionTabsUpdate(message);
+    return;
+  }
+  if (message.type === 'report_image_captured') {
+    this.recordReportImage?.(message.image);
+    this.updateReportImageSelection?.(message.selectedImageIds || []);
+    return;
+  }
+  if (message.type === 'report_images_selection') {
+    this.updateReportImageSelection?.(message.selectedImageIds || []);
     return;
   }
   if (message.type === 'subagent_start') {

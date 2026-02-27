@@ -13,6 +13,18 @@ const parseHeadersJson = (raw: string): Record<string, string> => {
   return Object.fromEntries(Object.entries(parsed).map(([key, value]) => [key, value == null ? '' : String(value)]));
 };
 
+const FONT_PRESET_STACKS: Record<string, string> = {
+  default: 'var(--font-sans-default)',
+  geist: 'var(--font-sans-geist)',
+  soft: 'var(--font-sans-soft)',
+};
+
+const FONT_STYLE_WEIGHTS: Record<string, string> = {
+  normal: '400',
+  medium: '500',
+  semibold: '600',
+};
+
 (SidePanelUI.prototype as any).applyUiZoom = function applyUiZoom(value: number, { persist = true } = {}) {
   const next = Number.isFinite(value) ? value : 1;
   const clamped = Math.min(1.25, Math.max(0.85, next));
@@ -22,6 +34,24 @@ const parseHeadersJson = (raw: string): Record<string, string> => {
   if (this.elements.uiZoomValue) this.elements.uiZoomValue.textContent = `${Math.round(clamped * 100)}%`;
   if (persist) {
     chrome.storage.local.set({ uiZoom: clamped }).catch(() => {});
+  }
+};
+
+(SidePanelUI.prototype as any).applyTypography = function applyTypography(
+  preset: string,
+  style: string,
+  { persist = true } = {},
+) {
+  const nextPreset = FONT_PRESET_STACKS[preset] ? preset : 'default';
+  const nextStyle = FONT_STYLE_WEIGHTS[style] ? style : 'normal';
+  this.fontPreset = nextPreset;
+  this.fontStylePreset = nextStyle;
+  document.documentElement.style.setProperty('--font-sans', FONT_PRESET_STACKS[nextPreset]);
+  document.documentElement.style.setProperty('--font-base-weight', FONT_STYLE_WEIGHTS[nextStyle]);
+  if (this.elements.fontPreset) this.elements.fontPreset.value = nextPreset;
+  if (this.elements.fontStylePreset) this.elements.fontStylePreset.value = nextStyle;
+  if (persist) {
+    chrome.storage.local.set({ fontPreset: nextPreset, fontStylePreset: nextStyle }).catch(() => {});
   }
 };
 
@@ -37,7 +67,7 @@ const parseHeadersJson = (raw: string): Record<string, string> => {
 
 (SidePanelUI.prototype as any).toggleCustomEndpoint = function toggleCustomEndpoint() {
   const provider = this.elements.provider?.value;
-  const isCustom = provider === 'custom' || provider === 'kimi';
+  const isCustom = provider === 'custom' || provider === 'kimi' || provider === 'openrouter';
 
   // Always show the endpoint field, but highlight when required
   if (this.elements.customEndpointGroup) {
@@ -55,6 +85,14 @@ const parseHeadersJson = (raw: string): Record<string, string> => {
         this.elements.customEndpoint.value = 'https://api.kimi.com/coding';
       }
       this.elements.customEndpoint.placeholder = 'https://api.kimi.com/coding';
+    } else if (provider === 'openrouter') {
+      this.elements.customEndpoint.placeholder = 'https://openrouter.ai/api/v1';
+      if (
+        !this.elements.customEndpoint.value ||
+        this.elements.customEndpoint.value === 'https://api.kimi.com/coding'
+      ) {
+        this.elements.customEndpoint.value = 'https://openrouter.ai/api/v1';
+      }
     } else if (isCustom) {
       this.elements.customEndpoint.placeholder = 'https://openrouter.ai/api/v1';
     } else {
@@ -66,6 +104,9 @@ const parseHeadersJson = (raw: string): Record<string, string> => {
   const modelHint = document.getElementById('modelHint');
   if (modelHint) {
     switch (provider) {
+      case 'parchi':
+        modelHint.textContent = 'Managed routing via your credits. Default: moonshotai/kimi-k2.5.';
+        break;
       case 'anthropic':
         modelHint.textContent = 'Recommended: claude-sonnet-4-20250514';
         break;
@@ -74,6 +115,9 @@ const parseHeadersJson = (raw: string): Record<string, string> => {
         break;
       case 'kimi':
         modelHint.textContent = 'Recommended: kimi-for-coding (or your Kimi model ID)';
+        break;
+      case 'openrouter':
+        modelHint.textContent = 'e.g. anthropic/claude-sonnet-4, openai/gpt-4o, google/gemini-2.0-flash';
         break;
       case 'custom':
         modelHint.textContent = 'Enter the model ID from your provider';
@@ -136,11 +180,11 @@ const parseHeadersJson = (raw: string): Record<string, string> => {
   if (!this.elements.profileEditorEndpointGroup) return;
   const provider = this.elements.profileEditorProvider?.value;
   this.elements.profileEditorEndpointGroup.style.display =
-    provider === 'custom' || provider === 'kimi' ? 'block' : 'none';
+    provider === 'custom' || provider === 'kimi' || provider === 'openrouter' ? 'block' : 'none';
 };
 
 (SidePanelUI.prototype as any).switchSettingsTab = function switchSettingsTab(
-  tabName: 'setup' | 'oauth' | 'model' | 'browser' | 'network' | 'prompt' | 'profiles' = 'setup',
+  tabName: 'setup' | 'oauth' | 'model' | 'browser' | 'network' | 'prompt' | 'profiles' | 'usage' = 'setup',
 ) {
   // Persist current form state when leaving setup tab
   if (this.currentSettingsTab === 'setup' && tabName !== 'setup') {
@@ -149,7 +193,7 @@ const parseHeadersJson = (raw: string): Record<string, string> => {
   }
   this.currentSettingsTab = tabName;
 
-  const tabs = ['setup', 'oauth', 'model', 'browser', 'network', 'prompt', 'profiles'] as const;
+  const tabs = ['setup', 'oauth', 'model', 'browser', 'network', 'prompt', 'profiles', 'usage'] as const;
   const tabElements: Record<string, HTMLElement | null> = {
     setup: this.elements.settingsTabSetup,
     oauth: this.elements.settingsTabOauth,
@@ -158,6 +202,7 @@ const parseHeadersJson = (raw: string): Record<string, string> => {
     network: this.elements.settingsTabNetwork,
     prompt: this.elements.settingsTabPrompt,
     profiles: this.elements.settingsTabProfiles,
+    usage: this.elements.settingsTabUsage || document.getElementById('settingsTabUsage'),
   };
   const btnElements: Record<string, HTMLElement | null> = {
     setup: this.elements.settingsTabSetupBtn,
@@ -167,6 +212,7 @@ const parseHeadersJson = (raw: string): Record<string, string> => {
     network: this.elements.settingsTabNetworkBtn,
     prompt: this.elements.settingsTabPromptBtn,
     profiles: this.elements.settingsTabProfilesBtn,
+    usage: this.elements.settingsTabUsageBtn || document.getElementById('settingsTabUsageBtn'),
   };
 
   for (const tab of tabs) {
@@ -176,6 +222,11 @@ const parseHeadersJson = (raw: string): Record<string, string> => {
     // Activate the pane inside the tab container
     const pane = tabElements[tab]?.querySelector('.settings-tab-pane') as HTMLElement | null;
     pane?.classList.toggle('active', isActive);
+  }
+
+  // Auto-fetch usage data when switching to usage tab
+  if (tabName === 'usage') {
+    this.refreshUsageTab?.();
   }
 };
 
@@ -205,9 +256,9 @@ const parseHeadersJson = (raw: string): Record<string, string> => {
 
   const storedConfigs = settings.configs || {};
   const baseConfig = {
-    provider: 'openai',
+    provider: '',
     apiKey: '',
-    model: 'gpt-4o',
+    model: '',
     customEndpoint: '',
     extraHeaders: {},
     systemPrompt: this.getDefaultSystemPrompt(),
@@ -232,6 +283,7 @@ const parseHeadersJson = (raw: string): Record<string, string> => {
   this.currentConfig = this.configs[settings.activeConfig] ? settings.activeConfig : 'default';
   this.auxAgentProfiles = settings.auxAgentProfiles || [];
   this.applyUiZoom(settings.uiZoom ?? 1, { persist: false });
+  this.applyTypography(settings.fontPreset ?? 'default', settings.fontStylePreset ?? 'normal', { persist: false });
   this.currentTheme = settings.theme || DEFAULT_THEME_ID;
   applyTheme(this.currentTheme);
   this.renderThemeGrid?.();
@@ -308,7 +360,7 @@ const parseHeadersJson = (raw: string): Record<string, string> => {
 
 (SidePanelUI.prototype as any).saveSettings = async function saveSettings() {
   if (
-    (this.elements.provider?.value === 'custom' || this.elements.provider?.value === 'kimi') &&
+    (this.elements.provider?.value === 'custom' || this.elements.provider?.value === 'kimi' || this.elements.provider?.value === 'openrouter') &&
     !this.validateCustomEndpoint()
   ) {
     this.updateStatus('Invalid custom endpoint URL', 'error');
@@ -395,10 +447,10 @@ const parseHeadersJson = (raw: string): Record<string, string> => {
     }
   }
   return {
-    provider: this.elements.provider?.value || current.provider || 'openai',
-    apiKey: this.elements.apiKey?.value || current.apiKey || '',
-    model: this.elements.model?.value || current.model || 'gpt-4o',
-    customEndpoint: this.elements.customEndpoint?.value || current.customEndpoint || '',
+    provider: this.elements.provider?.value ?? current.provider ?? '',
+    apiKey: this.elements.apiKey?.value ?? current.apiKey ?? '',
+    model: this.elements.model?.value ?? current.model ?? '',
+    customEndpoint: this.elements.customEndpoint?.value ?? current.customEndpoint ?? '',
     extraHeaders,
     systemPrompt: this.elements.systemPrompt?.value || current.systemPrompt || '',
     temperature: Number.parseFloat(this.elements.temperature?.value) || current.temperature || 0.7,
@@ -446,10 +498,10 @@ const parseHeadersJson = (raw: string): Record<string, string> => {
     const rawRelayUrl = (this.elements.relayUrl?.value || '').trim();
     const normalizedRelayUrl = rawRelayUrl && !rawRelayUrl.includes('://') ? `http://${rawRelayUrl}` : rawRelayUrl;
     const payload = {
-      provider: activeProfile.provider || 'openai',
-      apiKey: activeProfile.apiKey || '',
-      model: activeProfile.model || 'gpt-4o',
-      customEndpoint: activeProfile.customEndpoint || '',
+      provider: activeProfile.provider ?? '',
+      apiKey: activeProfile.apiKey ?? '',
+      model: activeProfile.model ?? '',
+      customEndpoint: activeProfile.customEndpoint ?? '',
       extraHeaders: activeProfile.extraHeaders || {},
       systemPrompt: activeProfile.systemPrompt || this.getDefaultSystemPrompt(),
       temperature: activeProfile.temperature ?? 0.7,
@@ -472,6 +524,8 @@ const parseHeadersJson = (raw: string): Record<string, string> => {
       allowedDomains: this.elements.allowedDomains?.value || '',
       auxAgentProfiles: this.auxAgentProfiles,
       uiZoom: this.uiZoom ?? 1,
+      fontPreset: this.fontPreset || 'default',
+      fontStylePreset: this.fontStylePreset || 'normal',
       theme: this.currentTheme || DEFAULT_THEME_ID,
       relayEnabled: this.elements.relayEnabled?.value === 'true',
       relayUrl: normalizedRelayUrl,
@@ -549,9 +603,13 @@ const parseHeadersJson = (raw: string): Record<string, string> => {
 (SidePanelUI.prototype as any).updatePromptSections = function updatePromptSections() {
   // Re-query elements in case they weren't available at constructor time (loaded via template)
   const orchSection = this.elements.orchestratorPromptSection || document.getElementById('orchestratorPromptSection');
-  const orchTextarea = this.elements.orchestratorPromptTextarea || document.getElementById('orchestratorPromptTextarea') as HTMLTextAreaElement | null;
+  const orchTextarea =
+    this.elements.orchestratorPromptTextarea ||
+    (document.getElementById('orchestratorPromptTextarea') as HTMLTextAreaElement | null);
   const visSection = this.elements.visionPromptSection || document.getElementById('visionPromptSection');
-  const visTextarea = this.elements.visionPromptTextarea || document.getElementById('visionPromptTextarea') as HTMLTextAreaElement | null;
+  const visTextarea =
+    this.elements.visionPromptTextarea ||
+    (document.getElementById('visionPromptTextarea') as HTMLTextAreaElement | null);
 
   // Cache
   if (orchSection) this.elements.orchestratorPromptSection = orchSection;

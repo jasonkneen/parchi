@@ -42,7 +42,7 @@
   flex-direction: column;
   gap: 12px;
   min-height: 0;
-  overflow-x: hidden;
+  overflow-x: clip;
 }
 
 .settings-tabs {
@@ -75,10 +75,10 @@
 }
 
 .settings-tab-button.active {
-  background: rgb(var(--accent-rgb) / 0.1);
-  border-color: rgb(var(--accent-rgb) / 0.2);
+  background: transparent;
+  border-color: rgb(var(--accent-rgb) / 0.45);
   color: var(--accent-light);
-  box-shadow: 0 0 14px rgb(var(--accent-rgb) / 0.06);
+  box-shadow: 0 0 10px rgb(var(--accent-rgb) / 0.08);
 }
 
 .settings-tab-button:active {
@@ -209,8 +209,8 @@
 
 .status-pill.connected {
   color: var(--foreground);
-  border-color: rgb(var(--accent-rgb) / 0.35);
-  background: rgb(var(--accent-rgb) / 0.08);
+  border-color: rgb(var(--accent-rgb) / 0.45);
+  background: transparent;
 }
 
 .status-pill.connected::before {
@@ -326,11 +326,16 @@
 }
 
 .form-group input:focus,
-.form-group select:focus,
 .form-group textarea:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgb(var(--accent-rgb) / 0.1);
   transform: translateY(-1px);
+}
+
+/* Select: no transform on focus — clips native dropdown in Firefox */
+.form-group select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgb(var(--accent-rgb) / 0.1);
 }
 
 .form-group input::placeholder,
@@ -472,10 +477,10 @@
 }
 
 .role-pill.active {
-  background: rgb(var(--accent-rgb) / 0.08);
-  border-color: rgb(var(--accent-rgb) / 0.25);
+  background: transparent;
+  border-color: rgb(var(--accent-rgb) / 0.45);
   color: var(--accent);
-  box-shadow: 0 0 10px rgb(var(--accent-rgb) / 0.06);
+  box-shadow: 0 0 8px rgb(var(--accent-rgb) / 0.08);
 }
 
 .profile-editor {
@@ -506,6 +511,100 @@
   max-height: 500px;
   resize: none;
   overflow-y: auto;
+}
+
+/* Model Picker */
+.model-picker-group {
+  position: relative;
+}
+
+.model-picker-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  margin-top: 2px;
+  background: var(--card);
+  border: 1px solid var(--ink-2);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25), 0 2px 8px rgba(0, 0, 0, 0.12);
+  overflow: hidden;
+}
+
+.model-picker-dropdown.hidden {
+  display: none;
+}
+
+.model-picker-filter {
+  width: 100%;
+  padding: 8px 10px !important;
+  border: none !important;
+  border-bottom: 1px solid var(--ink-1) !important;
+  border-radius: 0 !important;
+  background: var(--background) !important;
+  font-size: 11px;
+  color: var(--foreground);
+  outline: none;
+  box-shadow: none !important;
+}
+
+.model-picker-filter::placeholder {
+  color: var(--muted-dim);
+}
+
+.model-picker-list {
+  max-height: 220px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.model-picker-item {
+  padding: 6px 10px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--foreground);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-bottom: 1px solid color-mix(in oklab, var(--ink-1) 40%, transparent);
+}
+
+.model-picker-item:last-child {
+  border-bottom: none;
+}
+
+.model-picker-item:hover,
+.model-picker-item.focused {
+  background: rgb(var(--accent-rgb) / 0.08);
+  color: var(--accent);
+}
+
+.model-picker-item.selected {
+  background: rgb(var(--accent-rgb) / 0.12);
+  font-weight: 600;
+}
+
+.model-picker-item mark {
+  background: rgb(var(--accent-rgb) / 0.2);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.model-picker-empty {
+  padding: 14px 10px;
+  font-size: 11px;
+  color: var(--muted-dim);
+  text-align: center;
+}
+
+.model-picker-loading {
+  padding: 14px 10px;
+  font-size: 11px;
+  color: var(--muted);
+  text-align: center;
 }
 
 /* Theme Grid */
@@ -541,11 +640,9 @@
 }
 
 .theme-swatch.active {
-  border-color: rgb(var(--accent-rgb) / 0.4);
-  background: rgb(var(--accent-rgb) / 0.06);
-  box-shadow:
-    0 0 16px rgb(var(--accent-rgb) / 0.08),
-    inset 0 0 0 1px rgb(var(--accent-rgb) / 0.1);
+  border-color: rgb(var(--accent-rgb) / 0.5);
+  background: transparent;
+  box-shadow: 0 0 12px rgb(var(--accent-rgb) / 0.1);
 }
 
 .theme-swatch-color {
@@ -883,8 +980,8 @@
 }
 
 .tab-item.selected {
-  background: rgb(var(--accent-rgb) / 0.18);
-  border-color: rgb(var(--accent-rgb) / 0.45);
+  background: rgb(var(--accent-rgb) / 0.04);
+  border-color: rgb(var(--accent-rgb) / 0.5);
 }
 
 .tab-item-checkbox {

@@ -70,6 +70,20 @@ const toolIcons: Record<string, string> = {
   const displayName = toolName;
 
   if (!entry) {
+    // Cap toolCallViews — evict oldest entries
+    if (this.toolCallViews.size >= MAX_TOOL_CALL_VIEWS) {
+      const iter = this.toolCallViews.entries();
+      const excess = this.toolCallViews.size - MAX_TOOL_CALL_VIEWS + 1;
+      for (let i = 0; i < excess; i++) {
+        const next = iter.next().value;
+        if (next) {
+          const [key, old] = next;
+          old.element?.remove();
+          this.toolCallViews.delete(key);
+        }
+      }
+    }
+
     entry = {
       id: entryId,
       toolName: displayName,
@@ -129,6 +143,25 @@ const toolIcons: Record<string, string> = {
 
   // Animate duration
   this.animateToolDuration(entry);
+
+  // Click to expand/collapse tool result details
+  container.addEventListener('click', () => {
+    const existing = container.querySelector('.tool-detail');
+    if (existing) {
+      existing.remove();
+      return;
+    }
+    if (!entry.result) return;
+    const detail = document.createElement('div');
+    detail.className = 'tool-detail';
+    const resultText = typeof entry.result === 'object'
+      ? JSON.stringify(entry.result, null, 2)
+      : String(entry.result);
+    const truncated = resultText.length > 2000 ? resultText.slice(0, 2000) + '\n...(truncated)' : resultText;
+    detail.textContent = truncated;
+    container.appendChild(detail);
+  });
+  container.style.cursor = 'pointer';
 
   return container;
 };
@@ -192,6 +225,159 @@ const toolIcons: Record<string, string> = {
 
   // Store result for potential expansion
   entry.result = result;
+  this.attachScreenshotPreview(entry, result);
+};
+
+const MAX_REPORT_IMAGES = 50;
+const MAX_TOOL_CALL_VIEWS = 200;
+
+(SidePanelUI.prototype as any).recordReportImage = function recordReportImage(image: any) {
+  if (!image || typeof image.id !== 'string' || typeof image.dataUrl !== 'string') return;
+  const normalized = {
+    id: image.id,
+    dataUrl: image.dataUrl,
+    capturedAt: Number(image.capturedAt || Date.now()),
+    toolCallId: typeof image.toolCallId === 'string' ? image.toolCallId : undefined,
+    tabId: typeof image.tabId === 'number' ? image.tabId : undefined,
+    url: typeof image.url === 'string' ? image.url : undefined,
+    title: typeof image.title === 'string' ? image.title : undefined,
+    visionDescription: typeof image.visionDescription === 'string' ? image.visionDescription : undefined,
+    selected: image.selected === true,
+  };
+  if (!this.reportImages.has(normalized.id)) {
+    this.reportImageOrder.push(normalized.id);
+  }
+  this.reportImages.set(normalized.id, normalized);
+  if (normalized.selected) {
+    this.selectedReportImageIds.add(normalized.id);
+  } else {
+    this.selectedReportImageIds.delete(normalized.id);
+  }
+
+  // Cap reportImages — evict oldest non-selected images
+  if (this.reportImages.size > MAX_REPORT_IMAGES) {
+    const toEvict: string[] = [];
+    for (const id of this.reportImageOrder) {
+      if (this.reportImages.size - toEvict.length <= MAX_REPORT_IMAGES) break;
+      if (!this.selectedReportImageIds.has(id)) {
+        toEvict.push(id);
+      }
+    }
+    for (const id of toEvict) {
+      this.reportImages.delete(id);
+      // Remove DOM preview if it exists
+      const previewEl = document.querySelector(`.report-image-toggle[data-report-image-id="${id}"]`);
+      previewEl?.closest('.tool-screenshot-preview')?.remove();
+    }
+    this.reportImageOrder = this.reportImageOrder.filter((id: string) => this.reportImages.has(id));
+  }
+
+  if (normalized.toolCallId) {
+    const entry = this.toolCallViews.get(normalized.toolCallId);
+    if (entry) {
+      this.attachScreenshotPreview(entry, { reportImageId: normalized.id });
+    }
+  }
+};
+
+(SidePanelUI.prototype as any).updateReportImageSelection = function updateReportImageSelection(ids: any[]) {
+  const nextSelected = new Set(
+    (Array.isArray(ids) ? ids : [])
+      .map((value: unknown) => String(value || '').trim())
+      .filter((value: string) => value.length > 0),
+  );
+  this.selectedReportImageIds = nextSelected;
+  this.reportImages.forEach((image: any, id: string) => {
+    image.selected = nextSelected.has(id);
+  });
+
+  const checkboxes = document.querySelectorAll<HTMLInputElement>('.report-image-toggle[data-report-image-id]');
+  checkboxes.forEach((checkbox) => {
+    const imageId = checkbox.dataset.reportImageId || '';
+    const isSelected = nextSelected.has(imageId);
+    checkbox.checked = isSelected;
+    checkbox.closest('.tool-screenshot-preview')?.classList.toggle('selected', isSelected);
+  });
+};
+
+(SidePanelUI.prototype as any).attachScreenshotPreview = function attachScreenshotPreview(entry: any, result: any) {
+  if (!entry?.element) return;
+
+  let image: any = null;
+  const imageId = typeof result?.reportImageId === 'string' ? result.reportImageId : '';
+  if (imageId) {
+    image = this.reportImages.get(imageId) || null;
+  }
+
+  if (!image && typeof result?.dataUrl === 'string' && result.dataUrl.startsWith('data:image/')) {
+    const fallbackId = imageId || `img-inline-${entry.id}`;
+    const fallbackImage = {
+      id: fallbackId,
+      dataUrl: result.dataUrl,
+      capturedAt: Date.now(),
+      toolCallId: entry.id,
+      tabId: typeof result?.tabId === 'number' ? result.tabId : undefined,
+      url: typeof result?.url === 'string' ? result.url : undefined,
+      title: typeof result?.title === 'string' ? result.title : undefined,
+      visionDescription: typeof result?.visionDescription === 'string' ? result.visionDescription : undefined,
+      selected: this.selectedReportImageIds.has(fallbackId),
+    };
+    this.recordReportImage(fallbackImage);
+    image = this.reportImages.get(fallbackId) || fallbackImage;
+  }
+
+  if (!image || typeof image.dataUrl !== 'string') return;
+
+  let preview = entry.element.querySelector('.tool-screenshot-preview') as HTMLElement | null;
+  if (!preview) {
+    preview = document.createElement('div');
+    preview.className = 'tool-screenshot-preview';
+    entry.element.appendChild(preview);
+  }
+  entry.element.classList.add('has-preview');
+
+  const imageLabel = this.truncateText(image.title || image.url || image.id, 46);
+  const isSelected = this.selectedReportImageIds.has(image.id) || image.selected === true;
+  preview.classList.toggle('selected', isSelected);
+  preview.innerHTML = `
+    <img class="tool-screenshot-image" src="${image.dataUrl}" alt="${this.escapeHtml(imageLabel)}" />
+    <div class="tool-screenshot-meta">
+      <span class="tool-screenshot-label">${this.escapeHtml(imageLabel)}</span>
+      <label class="tool-screenshot-toggle">
+        <input
+          type="checkbox"
+          class="report-image-toggle"
+          data-report-image-id="${this.escapeHtml(image.id)}"
+          ${isSelected ? 'checked' : ''}
+        />
+        Include in report
+      </label>
+    </div>
+  `;
+
+  preview.addEventListener('click', (event) => event.stopPropagation());
+  const checkbox = preview.querySelector('.report-image-toggle') as HTMLInputElement | null;
+  checkbox?.addEventListener('click', (event) => event.stopPropagation());
+  checkbox?.addEventListener('change', (event) => {
+    event.stopPropagation();
+    const checked = checkbox.checked;
+    if (checked) {
+      this.selectedReportImageIds.add(image.id);
+    } else {
+      this.selectedReportImageIds.delete(image.id);
+    }
+    image.selected = checked;
+    preview.classList.toggle('selected', checked);
+  });
+};
+
+(SidePanelUI.prototype as any).nullifyFinalizedToolData = function nullifyFinalizedToolData() {
+  for (const entry of this.toolCallViews.values()) {
+    if (entry.endTime) {
+      entry.args = null;
+      entry.result = null;
+    }
+  }
 };
 
 (SidePanelUI.prototype as any).refreshTimelineHud = function refreshTimelineHud() {
@@ -257,7 +443,7 @@ const toolIcons: Record<string, string> = {
 
 (SidePanelUI.prototype as any).showErrorBanner = function showErrorBanner(
   message: string,
-  opts?: { category?: string; action?: string },
+  opts?: { category?: string; action?: string; recoverable?: boolean },
 ) {
   // Remove any existing error banners to prevent stacking
   document.querySelectorAll('.error-banner').forEach((el) => el.remove());
@@ -287,6 +473,10 @@ const toolIcons: Record<string, string> = {
     </button>
   `;
 
+  if (opts?.recoverable === false) {
+    banner.classList.add('error-persistent');
+  }
+
   const dismissButton = banner.querySelector('.error-dismiss');
   dismissButton?.addEventListener('click', () => banner.remove());
 
@@ -297,7 +487,9 @@ const toolIcons: Record<string, string> = {
   });
 
   document.body.appendChild(banner);
-  setTimeout(() => banner.remove(), 12000);
+  // Auto-dismiss: persistent for non-recoverable errors, shorter for recoverable
+  const dismissMs = opts?.recoverable === false ? 30000 : 12000;
+  setTimeout(() => banner.remove(), dismissMs);
 };
 
 (SidePanelUI.prototype as any).clearRunIncompleteBanner = function clearRunIncompleteBanner() {
@@ -351,6 +543,11 @@ const toolIcons: Record<string, string> = {
   const usageLabel = this.buildUsageLabel?.(this.lastUsage);
   if (usageLabel) {
     toolbarLabels.push(usageLabel);
+  }
+
+  const paidStatusHoverLabel = String(this.paidStatusHoverLabel || '').trim();
+  if (paidStatusHoverLabel) {
+    toolbarLabels.push(paidStatusHoverLabel);
   }
 
   if (this.elements.statusMeta) {

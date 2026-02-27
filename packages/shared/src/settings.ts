@@ -44,6 +44,8 @@ export const PARCHI_STORAGE_KEYS = [
   'visionProfile',
   'visionBridge',
   'uiZoom',
+  'fontPreset',
+  'fontStylePreset',
   'timelineCollapsed',
   'relayEnabled',
   'relayUrl',
@@ -62,6 +64,8 @@ export const PARCHI_STORAGE_KEYS = [
   'convexSubscriptionStatus',
   'convexSubscriptionCurrentPeriodEnd',
   'convexSubscriptionCheckedAt',
+  'convexCreditBalanceCents',
+  'parchiRuntimeStatus',
   'theme',
   'workflows',
 ] as const;

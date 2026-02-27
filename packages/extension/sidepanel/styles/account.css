@@ -65,6 +65,144 @@
   gap: 8px;
 }
 
+.account-usage-panels {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.account-chart-card {
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: var(--bg-tertiary);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.account-chart-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.account-chart-meta {
+  font-size: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  color: var(--text-secondary);
+}
+
+.account-credit-flow-bar {
+  display: flex;
+  width: 100%;
+  height: 8px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--border-color) 65%, transparent);
+  overflow: hidden;
+}
+
+.account-credit-fill {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+}
+
+.account-credit-fill.debit {
+  background: color-mix(in oklab, #ef5350 80%, #b71c1c);
+}
+
+.account-credit-fill.credit {
+  background: color-mix(in oklab, #66bb6a 80%, #2e7d32);
+}
+
+.account-chart-legend {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.account-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.legend-swatch {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  display: inline-block;
+}
+
+.legend-swatch.debit {
+  background: #ef5350;
+}
+
+.legend-swatch.credit {
+  background: #66bb6a;
+}
+
+.account-spend-chart {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+  align-items: end;
+  min-height: 48px;
+}
+
+.account-spend-bar {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 3px;
+  min-height: 48px;
+}
+
+.account-spend-bar-fill {
+  width: 100%;
+  min-height: 2px;
+  border-radius: 6px;
+  background: linear-gradient(180deg, rgb(var(--accent-rgb) / 0.95), rgb(var(--accent-rgb) / 0.35));
+}
+
+.account-spend-bar-label {
+  font-size: 9px;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+}
+
+.account-density-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  align-items: center;
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.account-density-track {
+  width: 100%;
+  height: 7px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: color-mix(in oklab, var(--border-color) 65%, transparent);
+}
+
+.account-density-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgb(var(--accent-rgb) / 0.95), rgb(var(--accent-rgb) / 0.45));
+}
+
 .account-stat {
   border: 1px solid var(--border-color);
   border-radius: 10px;
@@ -90,8 +228,260 @@
   text-align: right;
 }
 
+.account-ledger {
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-tertiary);
+  padding: 8px;
+}
+
+.account-ledger-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.account-ledger-subtitle {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.account-ledger-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 170px;
+  overflow-y: auto;
+}
+
+.account-ledger-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid color-mix(in oklab, var(--border-color) 75%, transparent);
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: color-mix(in oklab, var(--bg-primary) 20%, var(--bg-tertiary));
+}
+
+.account-ledger-time {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+.account-ledger-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.account-ledger-type {
+  font-size: 11px;
+  color: var(--text-primary);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.account-ledger-meta {
+  font-size: 10px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.account-ledger-amount {
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.account-ledger-amount.credit {
+  color: #2e7d32;
+}
+
+.account-ledger-amount.debit {
+  color: #b71c1c;
+}
+
+.account-ledger-empty {
+  font-size: 11px;
+  color: var(--text-secondary);
+  padding: 8px 4px;
+}
+
 @media (max-width: 540px) {
   .account-onboarding-actions {
     flex-direction: column;
   }
+}
+
+/* ============================================================================
+   Usage Tab — OpenRouter usage tables
+   ============================================================================ */
+
+.usage-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.usage-period-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+.usage-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.usage-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 8px;
+  background: var(--card);
+  border: 1px solid var(--ink-1);
+  border-radius: 10px;
+}
+
+.usage-stat-value {
+  font-size: 16px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: var(--foreground);
+  letter-spacing: -0.01em;
+}
+
+.usage-stat-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted-dim);
+  font-weight: 500;
+}
+
+.usage-table-section {
+  border: 1px solid var(--ink-1);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--card);
+}
+
+.usage-table-header {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--ink-1);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.usage-table-container {
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.usage-table-empty {
+  padding: 24px 16px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--muted-dim);
+}
+
+.usage-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12px;
+}
+
+.usage-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.usage-table th {
+  padding: 8px 12px;
+  text-align: left;
+  font-weight: 600;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  background: var(--background);
+  border-bottom: 1px solid var(--ink-2);
+  white-space: nowrap;
+}
+
+.usage-table th:last-child,
+.usage-table td:last-child {
+  text-align: right;
+}
+
+.usage-table td {
+  padding: 8px 12px;
+  color: var(--foreground);
+  border-bottom: 1px solid var(--ink-1);
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.usage-table td:first-child {
+  font-family: var(--font-sans);
+  font-weight: 500;
+  color: var(--foreground);
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.usage-table tbody tr:hover td {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.usage-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.usage-model-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.usage-model-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+
+.usage-cost-cell {
+  color: var(--foreground);
+  font-weight: 600;
 }

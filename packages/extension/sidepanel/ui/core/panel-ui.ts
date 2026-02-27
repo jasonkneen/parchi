@@ -1,4 +1,5 @@
 import type { RunPlan } from '../../../../shared/src/plan.js';
+import type { RecordedContext } from '../../../../shared/src/recording.js';
 import type { Message } from '../../../ai/message-schema.js';
 import type { UsageStats } from '../types/panel-types.js';
 import { getSidePanelElements } from './panel-elements.js';
@@ -47,6 +48,8 @@ export class SidePanelUI {
   lastUsage: UsageStats | null;
   sessionTokenTotals: UsageStats;
   uiZoom: number;
+  fontPreset: string;
+  fontStylePreset: string;
   toolPermissions: {
     read: boolean;
     interact: boolean;
@@ -95,7 +98,7 @@ export class SidePanelUI {
   timelineCollapsed: boolean;
   currentTheme: string;
   sessionTabsState: {
-    tabs: Array<{ id: number; title?: string; url?: string }>;
+    tabs: Array<{ id: number; title?: string; url?: string; favIconUrl?: string }>;
     activeTabId: number | null;
     maxTabs: number;
     groupTitle?: string;
@@ -108,6 +111,35 @@ export class SidePanelUI {
   _typingCheckTimerId: number | null;
   _mascotBubbleOpen: boolean;
   _currentVerb: string | null;
+  recordingState: { status: 'idle' | 'recording' | 'selecting'; elapsedMs: number; timerId: number | null };
+  pendingRecordedContext: RecordedContext | null;
+  reviewState: {
+    events: import('../../../../shared/src/recording.js').RecordingEvent[];
+    screenshots: import('../../../../shared/src/recording.js').RecordingScreenshot[];
+    excludedEventIndices: Set<number>;
+    selectedScreenshotIds: Set<string>;
+    activeTab: 'actions' | 'screenshots';
+  } | null;
+  reportImages: Map<
+    string,
+    {
+      id: string;
+      dataUrl: string;
+      capturedAt: number;
+      toolCallId?: string;
+      tabId?: number;
+      url?: string;
+      title?: string;
+      visionDescription?: string;
+      selected: boolean;
+    }
+  >;
+  reportImageOrder: string[];
+  selectedReportImageIds: Set<string>;
+  lifecyclePort: chrome.runtime.Port | null;
+  modelCatalogEntries: Array<{ provider: string; model: string }>;
+  modelCatalogUpdatedAt: number;
+  modelCatalogRefreshPromise: Promise<void> | null;
 
   // Methods attached via prototype in panel-modules
   declare init: () => Promise<void>;
@@ -151,6 +183,8 @@ export class SidePanelUI {
       totalTokens: 0,
     };
     this.uiZoom = 1;
+    this.fontPreset = 'default';
+    this.fontStylePreset = 'normal';
     this.toolPermissions = {
       read: true,
       interact: true,
@@ -197,6 +231,16 @@ export class SidePanelUI {
     this._typingCheckTimerId = null;
     this._mascotBubbleOpen = false;
     this._currentVerb = null;
+    this.recordingState = { status: 'idle', elapsedMs: 0, timerId: null };
+    this.pendingRecordedContext = null;
+    this.reviewState = null;
+    this.reportImages = new Map();
+    this.reportImageOrder = [];
+    this.selectedReportImageIds = new Set();
+    this.lifecyclePort = null;
+    this.modelCatalogEntries = [];
+    this.modelCatalogUpdatedAt = 0;
+    this.modelCatalogRefreshPromise = null;
     void this.init();
   }
 }

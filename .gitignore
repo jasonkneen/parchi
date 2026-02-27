@@ -2,9 +2,13 @@
 node_modules/
 
 # Build artifacts
+dist/
+dist-firefox/
 dist-relay/
 build/
 server/dist/
+*.map
+*.xpi
 
 # OS files
 .DS_Store
@@ -25,6 +29,12 @@ logs/
 *.zip
 *.crx
 *.pem
+*.xpi
+
+# Release packages in repo root
+/parchi-*.zip
+/parchi-*.xpi
+/dist.crx
 
 # Environment files
 .env
@@ -41,6 +51,10 @@ temp/
 
 # Planning notes
 plan.md
+CONVEX_PLAN.md
+
+# Perf test results
+tests/perf/perf-results-*.json
 
 .claude
 .osgrep
