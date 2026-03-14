@@ -2,6 +2,18 @@
 
 <img src="packages/extension/icons/icon.svg" alt="Parchi" width="120" height="120" />
 
+DO NOT SKIP THIS WARNING, DO NOT USE THIS SOFTWARE IF YOU DO NOT READ THIS:
+
+1. BROWSER AUTOMATION CAN PUT YOUR SOCIAL MEDIA ACCOUNTS AT RISK
+2. BROWSER AUTOMATION CAN CAN BE AGAINST TERMS OF SERVICE OF MANY WEBSITES 
+3. THIS CAN LEAD TO PROMPT INJECTION ATTACKS
+4. THIS CAN LEAD TO LEAKING YOUR PERSONAL INFORMATION
+5. THIS CAN CAUSE TECHNICAL ISSUES WITH YOUR BROWSER
+
+THIS IS ALL REAL YOU MUST UNDERSTAND THE RISKS OF USING BROWSER AUTOMATION AND TRUSTING AN LLM WITH YOUR BROWSER. 
+
+THIS TOOL WAS BUILT BY AND FOR PEOPLE WHO UNDERSTAND AND ACCEPT THESE RISKS. 
+
 # Parchi
 
 **Your AI-powered browser copilot.**
@@ -11,11 +23,10 @@ Chat-driven browser automation that lives in your sidebar. Navigate, read, click
 [![Chrome MV3](https://img.shields.io/badge/Chrome-MV3-4285F4?logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions/mv3/)
 [![Firefox](https://img.shields.io/badge/Firefox-109%2B-FF7139?logo=firefox&logoColor=white)](https://www.mozilla.org/firefox/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-a5b4fc.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.4.0-6366f1.svg)]()
 
 <br />
 
-[Installation](#-installation) · [Setup](#-setup-your-ai-provider) · [Features](#-features) · [Use Your Subscription](#-use-your-existing-ai-subscription) · [Relay CLI](#-relay-daemon--cli)
+[Installation](#-installation) · [Setup](#-setup-your-ai-provider) · [Features](#-features) · [Docs](docs/README.md) · [Relay CLI](#-relay-daemon--cli)
 
 </div>
 
@@ -25,17 +36,6 @@ Chat-driven browser automation that lives in your sidebar. Navigate, read, click
 
 ### Chrome (recommended)
 
-<table>
-<tr>
-<td width="60">
-
-**1.**
-
-</td>
-<td>
-
-**Get the extension files**
-
 ```bash
 git clone https://github.com/0xSero/parchi.git
 cd parchi
@@ -43,67 +43,13 @@ npm install
 npm run build
 ```
 
-This creates a `dist/` folder with the built extension.
+Then:
 
-</td>
-</tr>
-<tr>
-<td>
-
-**2.**
-
-</td>
-<td>
-
-**Open Chrome Extensions page**
-
-Navigate to `chrome://extensions` in your address bar, or go to **⋮ Menu → Extensions → Manage Extensions**.
-
-</td>
-</tr>
-<tr>
-<td>
-
-**3.**
-
-</td>
-<td>
-
-**Enable Developer Mode**
-
-Toggle the **Developer mode** switch in the top-right corner of the extensions page.
-
-</td>
-</tr>
-<tr>
-<td>
-
-**4.**
-
-</td>
-<td>
-
-**Load the extension**
-
-Click **"Load unpacked"** and select the `dist/` folder from the cloned repo.
-
-</td>
-</tr>
-<tr>
-<td>
-
-**5.**
-
-</td>
-<td>
-
-**Open Parchi**
-
-Click the Parchi icon in your toolbar (you may need to pin it first via the puzzle piece icon). The side panel opens — you're ready to go.
-
-</td>
-</tr>
-</table>
+1. open `chrome://extensions`
+2. enable **Developer mode**
+3. click **Load unpacked**
+4. select `dist/`
+5. pin and open Parchi from the toolbar
 
 ### Firefox
 
@@ -115,7 +61,7 @@ npm run build:firefox
 2. Click **"Load Temporary Add-on"**
 3. Select any file inside the `dist/` folder
 
-> **XPI packaging:** `npm run build:firefox:xpi` outputs `dist/parchi-0.4.0.xpi` for distribution. Requires Developer Edition/Nightly or Mozilla add-on signing for release installs.
+> **XPI packaging:** `npm run build:firefox:xpi` outputs `dist-firefox/<extension-name>-<version>.xpi` for distribution. Requires Developer Edition/Nightly or Mozilla add-on signing for release installs.
 
 ---
 
@@ -129,11 +75,11 @@ Use your own API key from any supported provider:
 
 | Provider | API URL | Example Models |
 |----------|---------|----------------|
-| **OpenAI** | `https://api.openai.com/v1` | `gpt-4o`, `gpt-4-turbo`, `o1` |
-| **Anthropic** | `https://api.anthropic.com/v1` | `claude-sonnet-4-20250514`, `claude-3-5-sonnet-20241022` |
-| **Kimi** | `https://api.moonshot.cn/v1` | `moonshot-v1-128k` |
+| **OpenAI** | `https://api.openai.com/v1` | `gpt-5.4`, `gpt-5-nano`, `gpt-5.3-codex` |
+| **Anthropic** | `https://api.anthropic.com/v1` | `claude-sonnet-4-6`, `claude-opus-4-6` |
+| **Kimi** | `https://api.moonshot.cn/v1` | `kimi-for-coding` (recommended) |
 | **OpenRouter** | `https://openrouter.ai/api/v1` | Any model on OpenRouter |
-| **Local (Ollama, LM Studio)** | `http://localhost:11434/v1` | `llama3`, `mistral`, etc. |
+| **Local (Ollama, LM Studio)** | `http://localhost:11434/v1` | `qwen`, `mistral`, etc. |
 | **Any OpenAI-compatible** | Your endpoint URL | Your model name |
 
 **Steps:**
@@ -186,44 +132,12 @@ CLIProxyAPI is an open-source proxy that converts your existing AI subscription 
 
 ## ✨ Features
 
-### Chat & AI
+- **Chat + AI** — streaming answers, reasoning display, profiles, vision support, context compaction, workflow shortcuts
+- **Browser tools** — navigate, click, clickAt, type, scroll, screenshot, findHtml, tab management, video helpers, planning, subagents
+- **Session tools** — session tabs, floating HUD, saved history, markdown export with tool traces
+- **Controls** — tool permissions, allowlists, confirmations, themes, zoom, custom headers
 
-- **Streaming responses** with real-time reasoning display
-- **Extended thinking** for Claude models (thinking budget scales with max tokens)
-- **Multiple profiles** — save different provider/model/prompt configs and switch instantly
-- **Vision support** — analyze screenshots and video frames with vision-capable models
-- **Context compaction** — auto-summarizes old conversation when approaching token limits
-- **Workflow templates** — save and reuse prompt templates with `/` quick access
-
-### Browser Automation (25+ tools)
-
-Parchi can control your browser through natural language:
-
-| Category | Tools | What they do |
-|----------|-------|-------------|
-| **Navigate** | `navigate`, `openTab`, `closeTab`, `switchTab` | Go to URLs, manage tabs |
-| **Interact** | `click`, `clickAt`, `type`, `pressKey`, `scroll` | Click elements, fill forms, press keys |
-| **Read** | `getContent`, `screenshot`, `findHtml` | Extract text, capture pages, search DOM |
-| **Video** | `watchVideo`, `getVideoInfo` | Analyze video by frame capture |
-| **Organize** | `groupTabs`, `getTabs`, `describeSessionTabs` | Group and list tabs |
-| **Plan** | `set_plan`, `update_plan` | Step-by-step task planning and tracking |
-| **Delegate** | `spawn_subagent`, `subagent_complete` | Multi-agent orchestration |
-
-### Session Management
-
-- **Session tabs** — auto-groups tabs opened during a session (Chrome)
-- **Floating HUD** showing active session tabs
-- **Chat history** — up to 50 sessions, 200 messages each
-- **Export** conversations as markdown (full, last response, or detailed with tool events)
-
-### Settings & Controls
-
-- **Tool permissions** — toggle read, interact, navigate, tabs, screenshots
-- **Domain allowlist** — restrict which sites the agent can act on
-- **Action confirmation** — require approval before the agent acts
-- **Themes** — Void, Ember, Forest, Ocean, and more
-- **UI zoom** — 85% to 125%
-- **Custom headers** — add auth tokens or special headers per profile
+See [`docs/agent-pipeline.md`](docs/agent-pipeline.md) for the runtime shape and [`docs/tab-process-performance-playbook.md`](docs/tab-process-performance-playbook.md) for perf triage.
 
 ---
 
@@ -238,9 +152,19 @@ PARCHI_RELAY_TOKEN=your-secret npm run build
 # 2. Start the daemon
 PARCHI_RELAY_TOKEN=your-secret npm run relay:daemon
 
-# 3. Enable in extension Settings → Relay section
-#    URL: http://127.0.0.1:17373
-#    Token: your-secret
+# 3. Open the extension once — it can auto-pair from localhost /v1/pair.
+#    (Manual fallback in Settings → Relay:
+#      URL: http://127.0.0.1:17373
+#      Token: your-secret)
+```
+
+**Safer managed daemon helper (recommended):**
+
+```bash
+npm run relay:secure -- start   # generates/stores strong token, loopback-only
+npm run relay:secure -- status
+npm run relay:secure -- rotate  # rotates token (+ restarts if running)
+npm run relay:secure -- stop
 ```
 
 **CLI commands:**
@@ -261,46 +185,98 @@ npm run relay -- tool navigate --args='{"url":"https://example.com"}'
 npm run relay -- run "Open example.com and summarize the page"
 ```
 
+### Electron desktop automation (relay-native + direct CLI)
+
+You can now control Electron apps (Slack, VS Code, Discord, etc.) in two modes:
+
+1. **Relay-native agent** (multi-agent routing through `parchi-relay`)
+2. **Direct CLI mode** (`parchi electron ...` passthrough to `agent-browser`)
+
+```bash
+# Build binaries
+npm run build
+
+# Start relay daemon (terminal A)
+PARCHI_RELAY_TOKEN=your-secret npm run relay:daemon
+
+# Start Electron relay agent (terminal B)
+PARCHI_RELAY_TOKEN=your-secret npm run electron:agent
+
+# Confirm agents and choose Electron as default when needed
+npm run relay -- agents
+npm run relay -- default-agent set <electron-agent-id>
+npm run relay -- tools
+npm run relay -- tool electron.launch --args='{\"app\":\"Slack\",\"port\":9222}'
+npm run relay -- tool electron.connect --args='{\"cdpEndpoint\":\"9222\"}'
+npm run relay -- tool electron.snapshot --args='{\"interactive\":true}'
+```
+
+Managed mode (recommended once relay secure is configured):
+
+```bash
+# Reads relay token/url from ~/.parchi/relay-secure.json
+npm run electron:secure -- start
+npm run electron:secure -- status
+npm run electron:secure -- stop
+```
+
+Direct mode:
+
+```bash
+# Launch app with remote debugging
+parchi electron launch "Slack" --port=9222
+
+# Pass any agent-browser command through parchi
+parchi electron connect 9222
+parchi electron snapshot -i
+parchi electron click @e5
+```
+
 ---
 
 ## 🏗 Architecture
 
-```
-┌─────────────────────────────────────────────────┐
-│                  Side Panel UI                   │
-│  Chat · Tools Timeline · Settings · History      │
-└──────────────────────┬──────────────────────────┘
-                       │ runtime messages
-┌──────────────────────▼──────────────────────────┐
-│            Background Service Worker             │
-│  Agent loop · Tool execution · Stream handling   │
-└───────┬───────────────────┬─────────────────────┘
-        │                   │
-   Chrome APIs         AI Provider
-  (tabs, scripting,    (OpenAI, Anthropic,
-   navigation)          custom endpoints)
-```
+High level:
 
-**Key paths:**
+- **Sidepanel UI** renders chat, history, settings, and tool timelines
+- **Background worker** runs the agent loop, tool execution, relay handling, and stream updates
+- **Shared contracts** define plans, prompts, tools, and runtime-message schemas
 
-| File | Role |
+**Workspaces:**
+
+| Workspace | Role |
 |------|------|
-| `packages/extension/background.ts` | Agent loop, AI calls, tool execution |
-| `packages/extension/sidepanel/` | UI — chat, settings, tools, history |
-| `packages/extension/tools/` | Browser automation tool definitions |
-| `packages/shared/` | Shared types and runtime message schemas |
+| `packages/backend/` | Convex backend (auth, billing, API proxy) |
+| `packages/cli/` | Local CLI entrypoint and daemon client |
+| `packages/electron-agent/` | Relay-native Electron desktop automation agent |
+| `packages/extension/` | Browser extension runtime, UI, and tools |
+| `packages/relay-service/` | Relay daemon + relay protocol CLI |
+| `packages/shared/` | Shared plans, prompts, schemas, and message types |
+| `packages/website/` | Static website + billing pages |
+
+More detail:
+
+- [`docs/README.md`](docs/README.md)
+- [`docs/agent-pipeline.md`](docs/agent-pipeline.md)
+- [`docs/tab-process-performance-playbook.md`](docs/tab-process-performance-playbook.md)
 
 ---
 
 ## 🔨 Development
 
 ```bash
-npm install          # install dependencies
-npm run build        # build to dist/
-npm run typecheck    # type checking
-npm run lint         # biome linter
-npm run lint:fix     # auto-fix lint issues
-npm run test:unit    # run unit tests
+npm install                   # install all workspace deps
+npm run build                 # build extension + relay + CLI bundles
+npm run typecheck             # repo-wide type checking
+npm run lint                  # biome linter
+npm run lint:fix              # auto-fix lint issues
+npm run test:unit             # run unit tests
+npm run test:integration      # run headless integration tests
+npm run test:e2e              # run browser E2E harness
+npm run check:repo-standards  # enforce changed-file guardrails
+npm run perf:tabs             # sample Firefox/Chrome tab CPU + RAM
+npm run backend:dev           # run Convex dev backend workspace
+npm run dev -w @parchi/website  # run website workspace locally
 ```
 
 After building, reload the extension in `chrome://extensions` to pick up changes.
@@ -311,6 +287,16 @@ After building, reload the extension in `chrome://extensions` to pick up changes
 npm run build:firefox       # build for Firefox → dist/
 npm run build:firefox:xpi   # package as .xpi for distribution
 ```
+
+### Performance leak audits
+
+```bash
+TAB_AUDIT_SAMPLES=6 TAB_AUDIT_INTERVAL_MS=10000 npm run perf:tabs
+```
+
+The audit now includes **Parchi-attributed Firefox totals** and **RSS/CPU slope** so you can separate overall browser pressure from likely extension pressure.
+
+Use the full workflow in [`docs/tab-process-performance-playbook.md`](docs/tab-process-performance-playbook.md) to run active/idle audits and validate regressions in Firefox + Chrome.
 
 ---
 

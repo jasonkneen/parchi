@@ -1,4 +1,9 @@
-import type { MessageContent } from './message-schema.js';
+import type { Message, MessageContent } from './message-schema.js';
+
+const asRecord = (value: unknown): Record<string, unknown> | null => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+};
 
 export type ExtractThinkingResult = {
   content: string;
@@ -20,7 +25,8 @@ export function extractTextFromResponseMessages(messages: unknown): string {
       return;
     }
     if (content && typeof content === 'object') {
-      const type = typeof (content as any).type === 'string' ? String((content as any).type).toLowerCase() : '';
+      const record = asRecord(content);
+      const type = typeof record?.type === 'string' ? String(record.type).toLowerCase() : '';
       if (type && (type.includes('thinking') || type.includes('reasoning') || type.includes('analysis'))) {
         return;
       }
@@ -28,16 +34,15 @@ export function extractTextFromResponseMessages(messages: unknown): string {
         return;
       }
       const text =
-        typeof (content as any).text === 'string'
-          ? (content as any).text
-          : typeof (content as any).content === 'string'
-            ? (content as any).content
-            : '';
+        typeof record?.text === 'string' ? record.text : typeof record?.content === 'string' ? record.content : '';
       if (text && text.trim()) collected.push(text);
     }
   };
 
-  messages.forEach((msg) => collectFromContent((msg as any)?.content));
+  messages.forEach((msg) => {
+    const message = asRecord(msg) as Message | null;
+    collectFromContent(message?.content);
+  });
   return collected.join('').trim();
 }
 
@@ -59,6 +64,53 @@ export function extractThinking(content: string | null | undefined, existingThin
   }
 
   return { content: cleanedContent, thinking };
+}
+
+export function extractThinkingFromResponseMessages(messages: unknown): string | null {
+  if (!Array.isArray(messages)) return null;
+  const thinkRegex = /<\s*(think|analysis|thinking)\s*>([\s\S]*?)<\s*\/\s*\1\s*>/gi;
+  const collected: string[] = [];
+
+  const collectFromText = (text: string) => {
+    let match;
+    while ((match = thinkRegex.exec(text)) !== null) {
+      if (match[2]) collected.push(match[2].trim());
+    }
+    thinkRegex.lastIndex = 0;
+  };
+
+  const collectFromContent = (content: unknown) => {
+    if (!content) return;
+    if (typeof content === 'string') {
+      collectFromText(content);
+      return;
+    }
+    if (Array.isArray(content)) {
+      content.forEach((part) => collectFromContent(part));
+      return;
+    }
+    if (content && typeof content === 'object') {
+      const record = asRecord(content);
+      if (!record) return;
+      const type = typeof record?.type === 'string' ? String(record.type) : '';
+      if (type && (type.includes('thinking') || type.includes('reasoning') || type.includes('analysis'))) {
+        const raw = record.text ?? record.content ?? record.value;
+        if (typeof raw === 'string' && raw.trim()) collected.push(raw.trim());
+        return;
+      }
+      if (typeof record?.text === 'string') {
+        collectFromText(record.text);
+        return;
+      }
+      if (typeof record?.content === 'string') {
+        collectFromText(record.content);
+      }
+    }
+  };
+
+  messages.forEach((msg) => collectFromContent(asRecord(msg)?.content));
+  const merged = collected.filter(Boolean).join('\n\n').trim();
+  return merged || null;
 }
 
 export function dedupeThinking(thinking: string | null) {

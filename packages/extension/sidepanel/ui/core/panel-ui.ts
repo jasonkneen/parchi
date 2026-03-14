@@ -1,10 +1,10 @@
-import type { RunPlan } from '../../../../shared/src/plan.js';
-import type { RecordedContext } from '../../../../shared/src/recording.js';
+import type { RecordedContext, RunPlan } from '@parchi/shared';
 import type { Message } from '../../../ai/message-schema.js';
-import type { UsageStats } from '../types/panel-types.js';
+import type { SubagentEntry, UsageStats } from '../types/panel-types.js';
 import { getSidePanelElements } from './panel-elements.js';
-
 export class SidePanelUI {
+  // Allow prototype augmentation across panel-*.ts modules.
+  [key: string]: any;
   elements: Record<string, any>;
   displayHistory: Message[];
   contextHistory: Message[];
@@ -13,6 +13,7 @@ export class SidePanelUI {
   firstUserMessage: string;
   currentConfig: string;
   configs: Record<string, any>;
+  providers: Record<string, any>;
   toolCallViews: Map<string, any>;
   lastChatTurn: HTMLElement | null;
   selectedTabs: Map<number, any>;
@@ -44,6 +45,27 @@ export class SidePanelUI {
     maxContextTokens: number;
     percent: number;
   };
+  contextCompactionState: {
+    inProgress: boolean;
+    lastResult: 'success' | 'skipped' | 'error' | null;
+    lastMessage: string | null;
+    lastTrimmedCount?: number;
+    lastPreservedCount?: number;
+    lastCompactedAt: number;
+    lastCompletedAt: number;
+    lastTrigger?: string;
+    lastSource?: string;
+    lastBeforePercent?: number | null;
+    lastAfterPercent?: number | null;
+    lastMetrics?: Record<string, unknown> | null;
+    lastEvent?: {
+      stage?: string;
+      note?: string;
+      source?: string;
+      details?: Record<string, unknown>;
+      timestamp?: number;
+    } | null;
+  };
   sessionTokensUsed: number;
   lastUsage: UsageStats | null;
   sessionTokenTotals: UsageStats;
@@ -59,14 +81,20 @@ export class SidePanelUI {
   };
   auxAgentProfiles: string[];
   currentView: 'chat' | 'history';
-  currentSettingsTab: 'setup' | 'oauth' | 'model' | 'browser' | 'network' | 'prompt' | 'profiles';
+  currentSettingsTab: 'providers' | 'model' | 'generation' | 'advanced';
   profileEditorTarget: string;
-  subagents: Map<string, { name: string; status: string; messages: any[]; tasks?: string[] }>;
+  subagents: Map<string, SubagentEntry>;
   activeAgent: string;
+  tabToAgentId: Map<number, string>;
+  missionControlOpen: boolean;
+  mcSelectedAgentId: string | null;
+
   activityPanelOpen: boolean;
   latestThinking: string | null;
   activeToolName: string | null;
   streamingReasoning: string;
+  streamingUsageEstimatedTokens: number;
+  streamingUsageEstimatedTokensApplied: number;
   currentPlan: RunPlan | null;
   stepTimeline: {
     steps: Map<number, { el: HTMLElement; toolsEl: HTMLElement; bodyEl: HTMLElement }>;
@@ -90,6 +118,7 @@ export class SidePanelUI {
     }
   >;
   pendingTurnDraft: { userMessage: string; startedAt: number } | null;
+  queuedMessage: string | null;
   isReplayingHistory: boolean;
   _lastRuntimeMessageAt: number;
   _watchdogTimerId: ReturnType<typeof setInterval> | null;
@@ -97,13 +126,6 @@ export class SidePanelUI {
   _deleteConfirmAt: number | null;
   timelineCollapsed: boolean;
   currentTheme: string;
-  sessionTabsState: {
-    tabs: Array<{ id: number; title?: string; url?: string; favIconUrl?: string }>;
-    activeTabId: number | null;
-    maxTabs: number;
-    groupTitle?: string;
-    interactingTabId: number | null;
-  };
   workflows: Array<{ id: string; name: string; prompt: string; createdAt: number }>;
   workflowMenuOpen: boolean;
   workflowMenuIndex: number;
@@ -114,8 +136,8 @@ export class SidePanelUI {
   recordingState: { status: 'idle' | 'recording' | 'selecting'; elapsedMs: number; timerId: number | null };
   pendingRecordedContext: RecordedContext | null;
   reviewState: {
-    events: import('../../../../shared/src/recording.js').RecordingEvent[];
-    screenshots: import('../../../../shared/src/recording.js').RecordingScreenshot[];
+    events: import('@parchi/shared').RecordingEvent[];
+    screenshots: import('@parchi/shared').RecordingScreenshot[];
     excludedEventIndices: Set<number>;
     selectedScreenshotIds: Set<string>;
     activeTab: 'actions' | 'screenshots';
@@ -132,6 +154,7 @@ export class SidePanelUI {
       title?: string;
       visionDescription?: string;
       selected: boolean;
+      _blobUrl?: string;
     }
   >;
   reportImageOrder: string[];
@@ -140,13 +163,11 @@ export class SidePanelUI {
   modelCatalogEntries: Array<{ provider: string; model: string }>;
   modelCatalogUpdatedAt: number;
   modelCatalogRefreshPromise: Promise<void> | null;
-
-  // Methods attached via prototype in panel-modules
-  declare init: () => Promise<void>;
+  _autoSaveDirHandle: any;
+  declare init: () => Promise<void>; // Methods attached via prototype in panel-modules
 
   constructor() {
     this.elements = getSidePanelElements();
-
     this.displayHistory = [];
     this.contextHistory = [];
     const suffix = typeof crypto?.randomUUID === 'function' ? crypto.randomUUID() : String(Date.now());
@@ -155,6 +176,7 @@ export class SidePanelUI {
     this.firstUserMessage = '';
     this.currentConfig = 'default';
     this.configs = { default: {} };
+    this.providers = {};
     this.toolCallViews = new Map();
     this.lastChatTurn = null;
     this.selectedTabs = new Map();
@@ -175,6 +197,15 @@ export class SidePanelUI {
       maxContextTokens: 196000,
       percent: 0,
     };
+    this.contextCompactionState = {
+      inProgress: false,
+      lastResult: null,
+      lastMessage: null,
+      lastCompactedAt: 0,
+      lastCompletedAt: 0,
+      lastMetrics: null,
+      lastEvent: null,
+    };
     this.sessionTokensUsed = 0;
     this.lastUsage = null;
     this.sessionTokenTotals = {
@@ -194,14 +225,20 @@ export class SidePanelUI {
     };
     this.auxAgentProfiles = [];
     this.currentView = 'chat';
-    this.currentSettingsTab = 'setup';
+    this.currentSettingsTab = 'providers';
     this.profileEditorTarget = 'default';
     this.subagents = new Map();
     this.activeAgent = 'main';
+    this.tabToAgentId = new Map();
+    this.missionControlOpen = false;
+    this.mcSelectedAgentId = null;
+
     this.activityPanelOpen = false;
     this.latestThinking = null;
     this.activeToolName = null;
     this.streamingReasoning = '';
+    this.streamingUsageEstimatedTokens = 0;
+    this.streamingUsageEstimatedTokensApplied = 0;
     this.currentPlan = null;
     this.stepTimeline = {
       steps: new Map(),
@@ -210,6 +247,7 @@ export class SidePanelUI {
     };
     this.historyTurnMap = new Map();
     this.pendingTurnDraft = null;
+    this.queuedMessage = null;
     this.isReplayingHistory = false;
     this._lastRuntimeMessageAt = 0;
     this._watchdogTimerId = null;
@@ -217,13 +255,6 @@ export class SidePanelUI {
     this._deleteConfirmAt = null;
     this.timelineCollapsed = true;
     this.currentTheme = 'void';
-    this.sessionTabsState = {
-      tabs: [],
-      activeTabId: null,
-      maxTabs: 5,
-      groupTitle: undefined,
-      interactingTabId: null,
-    };
     this.workflows = [];
     this.workflowMenuOpen = false;
     this.workflowMenuIndex = -1;
@@ -241,6 +272,7 @@ export class SidePanelUI {
     this.modelCatalogEntries = [];
     this.modelCatalogUpdatedAt = 0;
     this.modelCatalogRefreshPromise = null;
+    this._autoSaveDirHandle = null;
     void this.init();
   }
 }

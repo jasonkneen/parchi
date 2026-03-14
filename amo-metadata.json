@@ -1,0 +1,11 @@
+{
+  "categories": {
+    "firefox": ["other"]
+  },
+  "summary": {
+    "en-US": "AI browser automation assistant - model agnostic"
+  },
+  "version": {
+    "license": "MIT"
+  }
+}

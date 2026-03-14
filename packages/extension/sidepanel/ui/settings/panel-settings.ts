@@ -1,7 +1,15 @@
-import { DEFAULT_AGENT_SYSTEM_PROMPT } from '../../../../shared/src/prompts.js';
-import { PARCHI_STORAGE_KEYS } from '../../../../shared/src/settings.js';
+import { DEFAULT_AGENT_SYSTEM_PROMPT } from '@parchi/shared';
+import { materializeProfileWithProvider } from '../../../state/provider-registry.js';
+import {
+  hydrateSettingsStore,
+  patchSettingsStoreSnapshot,
+  replaceSettingsStoreSnapshot,
+} from '../../../state/stores/settings-store.js';
 import { SidePanelUI } from '../core/panel-ui.js';
-import { THEMES, DEFAULT_THEME_ID, applyTheme } from './themes.js';
+const sidePanelProto = SidePanelUI.prototype as SidePanelUI & Record<string, unknown>;
+
+import { syncOAuthProfiles } from './oauth-profiles.js';
+import { DEFAULT_THEME_ID, THEMES, applyTheme, getThemeById } from './themes.js';
 
 const parseHeadersJson = (raw: string): Record<string, string> => {
   const trimmed = raw.trim();
@@ -17,6 +25,9 @@ const FONT_PRESET_STACKS: Record<string, string> = {
   default: 'var(--font-sans-default)',
   geist: 'var(--font-sans-geist)',
   soft: 'var(--font-sans-soft)',
+  'dm-sans': 'var(--font-sans-dm)',
+  plex: 'var(--font-sans-plex)',
+  manrope: 'var(--font-sans-manrope)',
 };
 
 const FONT_STYLE_WEIGHTS: Record<string, string> = {
@@ -25,7 +36,7 @@ const FONT_STYLE_WEIGHTS: Record<string, string> = {
   semibold: '600',
 };
 
-(SidePanelUI.prototype as any).applyUiZoom = function applyUiZoom(value: number, { persist = true } = {}) {
+sidePanelProto.applyUiZoom = function applyUiZoom(value: number, { persist = true } = {}) {
   const next = Number.isFinite(value) ? value : 1;
   const clamped = Math.min(1.25, Math.max(0.85, next));
   this.uiZoom = clamped;
@@ -33,15 +44,11 @@ const FONT_STYLE_WEIGHTS: Record<string, string> = {
   if (this.elements.uiZoom) this.elements.uiZoom.value = clamped.toFixed(2);
   if (this.elements.uiZoomValue) this.elements.uiZoomValue.textContent = `${Math.round(clamped * 100)}%`;
   if (persist) {
-    chrome.storage.local.set({ uiZoom: clamped }).catch(() => {});
+    void patchSettingsStoreSnapshot({ uiZoom: clamped }).catch(() => {});
   }
 };
 
-(SidePanelUI.prototype as any).applyTypography = function applyTypography(
-  preset: string,
-  style: string,
-  { persist = true } = {},
-) {
+sidePanelProto.applyTypography = function applyTypography(preset: string, style: string, { persist = true } = {}) {
   const nextPreset = FONT_PRESET_STACKS[preset] ? preset : 'default';
   const nextStyle = FONT_STYLE_WEIGHTS[style] ? style : 'normal';
   this.fontPreset = nextPreset;
@@ -51,21 +58,21 @@ const FONT_STYLE_WEIGHTS: Record<string, string> = {
   if (this.elements.fontPreset) this.elements.fontPreset.value = nextPreset;
   if (this.elements.fontStylePreset) this.elements.fontStylePreset.value = nextStyle;
   if (persist) {
-    chrome.storage.local.set({ fontPreset: nextPreset, fontStylePreset: nextStyle }).catch(() => {});
+    void patchSettingsStoreSnapshot({ fontPreset: nextPreset, fontStylePreset: nextStyle }).catch(() => {});
   }
 };
 
-(SidePanelUI.prototype as any).adjustUiZoom = function adjustUiZoom(delta: number) {
+sidePanelProto.adjustUiZoom = function adjustUiZoom(delta: number) {
   const next = (this.uiZoom || 1) + delta;
   this.applyUiZoom(next);
 };
 
-(SidePanelUI.prototype as any).cancelSettings = async function cancelSettings() {
+sidePanelProto.cancelSettings = async function cancelSettings() {
   await this.loadSettings();
   this.openChatView?.();
 };
 
-(SidePanelUI.prototype as any).toggleCustomEndpoint = function toggleCustomEndpoint() {
+sidePanelProto.toggleCustomEndpoint = function toggleCustomEndpoint() {
   const provider = this.elements.provider?.value;
   const isCustom = provider === 'custom' || provider === 'kimi' || provider === 'openrouter';
 
@@ -87,10 +94,7 @@ const FONT_STYLE_WEIGHTS: Record<string, string> = {
       this.elements.customEndpoint.placeholder = 'https://api.kimi.com/coding';
     } else if (provider === 'openrouter') {
       this.elements.customEndpoint.placeholder = 'https://openrouter.ai/api/v1';
-      if (
-        !this.elements.customEndpoint.value ||
-        this.elements.customEndpoint.value === 'https://api.kimi.com/coding'
-      ) {
+      if (!this.elements.customEndpoint.value || this.elements.customEndpoint.value === 'https://api.kimi.com/coding') {
         this.elements.customEndpoint.value = 'https://openrouter.ai/api/v1';
       }
     } else if (isCustom) {
@@ -128,7 +132,7 @@ const FONT_STYLE_WEIGHTS: Record<string, string> = {
   }
 };
 
-(SidePanelUI.prototype as any).validateCustomEndpoint = function validateCustomEndpoint() {
+sidePanelProto.validateCustomEndpoint = function validateCustomEndpoint() {
   if (!this.elements.customEndpoint) return true;
   const url = this.elements.customEndpoint.value.trim();
   if (!url) return true;
@@ -142,7 +146,7 @@ const FONT_STYLE_WEIGHTS: Record<string, string> = {
   }
 };
 
-(SidePanelUI.prototype as any).validateCustomHeaders = function validateCustomHeaders() {
+sidePanelProto.validateCustomHeaders = function validateCustomHeaders() {
   if (!this.elements.customHeaders) return true;
   const raw = this.elements.customHeaders.value || '';
   if (!raw.trim()) {
@@ -159,7 +163,7 @@ const FONT_STYLE_WEIGHTS: Record<string, string> = {
   }
 };
 
-(SidePanelUI.prototype as any).validateProfileEditorHeaders = function validateProfileEditorHeaders() {
+sidePanelProto.validateProfileEditorHeaders = function validateProfileEditorHeaders() {
   if (!this.elements.profileEditorHeaders) return true;
   const raw = this.elements.profileEditorHeaders.value || '';
   if (!raw.trim()) {
@@ -176,61 +180,109 @@ const FONT_STYLE_WEIGHTS: Record<string, string> = {
   }
 };
 
-(SidePanelUI.prototype as any).toggleProfileEditorEndpoint = function toggleProfileEditorEndpoint() {
+sidePanelProto.toggleProfileEditorEndpoint = function toggleProfileEditorEndpoint() {
   if (!this.elements.profileEditorEndpointGroup) return;
   const provider = this.elements.profileEditorProvider?.value;
   this.elements.profileEditorEndpointGroup.style.display =
     provider === 'custom' || provider === 'kimi' || provider === 'openrouter' ? 'block' : 'none';
 };
 
-(SidePanelUI.prototype as any).switchSettingsTab = function switchSettingsTab(
-  tabName: 'setup' | 'oauth' | 'model' | 'browser' | 'network' | 'prompt' | 'profiles' | 'usage' = 'setup',
+sidePanelProto.switchSettingsTab = function switchSettingsTab(
+  tabName: 'providers' | 'model' | 'generation' | 'advanced' | string = 'providers',
 ) {
-  // Persist current form state when leaving setup tab
-  if (this.currentSettingsTab === 'setup' && tabName !== 'setup') {
-    this.configs[this.currentConfig] = this.collectCurrentFormProfile();
-    void this.persistAllSettings({ silent: true });
-  }
-  this.currentSettingsTab = tabName;
+  // Map legacy tab names to v4 tabs
+  const tabMap: Record<string, string> = {
+    connect: 'providers',
+    setup: 'providers',
+    oauth: 'providers',
+    profiles: 'model',
+    look: 'advanced',
+    design: 'advanced',
+    agents: 'advanced',
+    system: 'advanced',
+    usage: 'advanced',
+  };
+  const resolvedTab = (tabMap[tabName] || tabName) as 'providers' | 'model' | 'generation' | 'advanced';
+  this.currentSettingsTab = resolvedTab;
 
-  const tabs = ['setup', 'oauth', 'model', 'browser', 'network', 'prompt', 'profiles', 'usage'] as const;
+  const tabs = ['providers', 'model', 'generation', 'advanced'] as const;
   const tabElements: Record<string, HTMLElement | null> = {
-    setup: this.elements.settingsTabSetup,
-    oauth: this.elements.settingsTabOauth,
-    model: this.elements.settingsTabModel,
-    browser: this.elements.settingsTabBrowser,
-    network: this.elements.settingsTabNetwork,
-    prompt: this.elements.settingsTabPrompt,
-    profiles: this.elements.settingsTabProfiles,
-    usage: this.elements.settingsTabUsage || document.getElementById('settingsTabUsage'),
+    providers: this.elements.settingsTabProviders || document.getElementById('settingsTabProviders'),
+    model: this.elements.settingsTabModel || document.getElementById('settingsTabModel'),
+    generation: this.elements.settingsTabGeneration || document.getElementById('settingsTabGeneration'),
+    advanced: this.elements.settingsTabAdvanced || document.getElementById('settingsTabAdvanced'),
   };
   const btnElements: Record<string, HTMLElement | null> = {
-    setup: this.elements.settingsTabSetupBtn,
-    oauth: this.elements.settingsTabOauthBtn,
-    model: this.elements.settingsTabModelBtn,
-    browser: this.elements.settingsTabBrowserBtn,
-    network: this.elements.settingsTabNetworkBtn,
-    prompt: this.elements.settingsTabPromptBtn,
-    profiles: this.elements.settingsTabProfilesBtn,
-    usage: this.elements.settingsTabUsageBtn || document.getElementById('settingsTabUsageBtn'),
+    providers: this.elements.settingsTabProvidersBtn || document.getElementById('settingsTabProvidersBtn'),
+    model: this.elements.settingsTabModelBtn || document.getElementById('settingsTabModelBtn'),
+    generation: this.elements.settingsTabGenerationBtn || document.getElementById('settingsTabGenerationBtn'),
+    advanced: this.elements.settingsTabAdvancedBtn || document.getElementById('settingsTabAdvancedBtn'),
   };
 
   for (const tab of tabs) {
-    const isActive = tab === tabName;
+    const isActive = tab === resolvedTab;
     tabElements[tab]?.classList.toggle('hidden', !isActive);
     btnElements[tab]?.classList.toggle('active', isActive);
-    // Activate the pane inside the tab container
     const pane = tabElements[tab]?.querySelector('.settings-tab-pane') as HTMLElement | null;
     pane?.classList.toggle('active', isActive);
+    btnElements[tab]?.setAttribute('aria-selected', isActive ? 'true' : 'false');
   }
 
-  // Auto-fetch usage data when switching to usage tab
-  if (tabName === 'usage') {
-    this.refreshUsageTab?.();
+  if (resolvedTab === 'providers') {
+    this.renderOAuthProviderGrid?.();
+    this.renderPaidModeProviderGrid?.();
+    this.renderApiProviderGrid?.();
+  }
+  if (resolvedTab === 'model') {
+    this.renderModelSelectorGrid?.();
+  }
+  if (resolvedTab === 'generation') {
+    this.populateGenerationTab?.();
+  }
+  if (resolvedTab === 'advanced') {
+    this.renderTeamProfileList?.();
+    this.renderThemeGrid?.();
   }
 };
 
-(SidePanelUI.prototype as any).createProfileFromInput = function createProfileFromInput() {
+sidePanelProto.syncAccountAvatar = function syncAccountAvatar() {
+  const initialsEl = this.elements.settingsAccountAvatar;
+  if (!initialsEl) return;
+  const label = String(this.elements.accountUserValue?.textContent || '').trim();
+  const fallback = label && label !== '-' ? label : 'Account';
+  const parts = fallback.split(/[\s@._-]+/).filter(Boolean);
+  const initials = (parts[0]?.[0] || 'A') + (parts[1]?.[0] || '');
+  initialsEl.textContent = initials.slice(0, 2).toUpperCase();
+};
+
+sidePanelProto.renderTeamProfileList = function renderTeamProfileList() {
+  const list = this.elements.teamProfileList as HTMLElement | null;
+  if (!list) return;
+  const names = Object.keys(this.configs || {}).filter((name) => name !== this.currentConfig);
+  if (!names.length) {
+    list.innerHTML = '<div class="history-empty">Create more profiles to assign team roles.</div>';
+    return;
+  }
+  list.innerHTML = names
+    .map((name) => {
+      const checked = this.auxAgentProfiles.includes(name) ? 'checked' : '';
+      const config = materializeProfileWithProvider(
+        { providers: this.providers, configs: this.configs },
+        name,
+        this.configs[name] || {},
+      );
+      return `<label class="team-profile-item">
+        <input type="checkbox" data-team-profile="${this.escapeHtml(name)}" ${checked} />
+        <span class="team-profile-copy">
+          <span class="team-profile-name">${this.escapeHtml(name)}</span>
+          <span class="team-profile-meta">${this.escapeHtml(config.providerLabel || config.provider || 'Provider')} · ${this.escapeHtml(config.model || 'No model')}</span>
+        </span>
+      </label>`;
+    })
+    .join('');
+};
+
+sidePanelProto.createProfileFromInput = function createProfileFromInput() {
   const name = (this.elements.newProfileNameInput?.value || '').trim();
   if (!name) {
     this.updateStatus('Enter a profile name first', 'warning');
@@ -245,10 +297,12 @@ const FONT_STYLE_WEIGHTS: Record<string, string> = {
   this.editProfile(name, true);
 };
 
-(SidePanelUI.prototype as any).loadSettings = async function loadSettings() {
+sidePanelProto.loadSettings = async function loadSettings() {
   let settings: Record<string, any> = {};
   try {
-    settings = await chrome.storage.local.get(PARCHI_STORAGE_KEYS as unknown as string[]);
+    // hydrateSettingsStore() already runs migrateSettingsToProviderRegistry()
+    // via readSettingsSnapshot() — no need to double-migrate.
+    settings = await hydrateSettingsStore();
   } catch (error) {
     console.error('[Parchi] Failed to load settings from storage:', error);
     this.updateStatus('Failed to load settings', 'error');
@@ -280,7 +334,32 @@ const FONT_STYLE_WEIGHTS: Record<string, string> = {
     default: { ...baseConfig, ...(storedConfigs.default || {}) },
     ...storedConfigs,
   };
-  this.currentConfig = this.configs[settings.activeConfig] ? settings.activeConfig : 'default';
+  this.providers = settings.providers || {};
+  const storedActiveConfig = typeof settings.activeConfig === 'string' ? settings.activeConfig : '';
+  const storedActiveProvider = String(settings.provider || '')
+    .trim()
+    .toLowerCase();
+  const storedActiveModel = String(settings.model || '').trim();
+  const legacyActiveConfig = (() => {
+    if (!storedActiveModel) return '';
+    const profileNames = Object.keys(this.configs);
+    const exactProviderModelMatch = profileNames.find((name) => {
+      const config = this.configs[name] || {};
+      const provider = String(config.provider || '')
+        .trim()
+        .toLowerCase();
+      const model = String(config.model || '').trim();
+      return provider === storedActiveProvider && model === storedActiveModel;
+    });
+    if (exactProviderModelMatch) return exactProviderModelMatch;
+
+    return profileNames.find((name) => {
+      const config = this.configs[name] || {};
+      const model = String(config.model || '').trim();
+      return model === storedActiveModel;
+    });
+  })();
+  this.currentConfig = this.configs[storedActiveConfig] ? storedActiveConfig : legacyActiveConfig || 'default';
   this.auxAgentProfiles = settings.auxAgentProfiles || [];
   this.applyUiZoom(settings.uiZoom ?? 1, { persist: false });
   this.applyTypography(settings.fontPreset ?? 'default', settings.fontStylePreset ?? 'normal', { persist: false });
@@ -288,29 +367,28 @@ const FONT_STYLE_WEIGHTS: Record<string, string> = {
   applyTheme(this.currentTheme);
   this.renderThemeGrid?.();
 
-  if (this.elements.visionBridge)
-    this.elements.visionBridge.value = settings.visionBridge !== undefined ? String(settings.visionBridge) : 'true';
+  if (this.elements.visionBridge) this.elements.visionBridge.checked = settings.visionBridge !== false;
   if (this.elements.visionProfile) this.elements.visionProfile.value = settings.visionProfile || '';
-  if (this.elements.orchestratorToggle)
-    this.elements.orchestratorToggle.value =
-      settings.useOrchestrator !== undefined ? String(settings.useOrchestrator) : 'false';
+  if (this.elements.orchestratorToggle) this.elements.orchestratorToggle.checked = settings.useOrchestrator === true;
   if (this.elements.orchestratorProfile) this.elements.orchestratorProfile.value = settings.orchestratorProfile || '';
-  if (this.elements.showThinking)
-    this.elements.showThinking.value = settings.showThinking !== undefined ? String(settings.showThinking) : 'true';
-  if (this.elements.streamResponses)
-    this.elements.streamResponses.value =
-      settings.streamResponses !== undefined ? String(settings.streamResponses) : 'true';
-  if (this.elements.autoScroll)
-    this.elements.autoScroll.value = settings.autoScroll !== undefined ? String(settings.autoScroll) : 'true';
-  if (this.elements.confirmActions)
-    this.elements.confirmActions.value =
-      settings.confirmActions !== undefined ? String(settings.confirmActions) : 'true';
-  if (this.elements.saveHistory)
-    this.elements.saveHistory.value = settings.saveHistory !== undefined ? String(settings.saveHistory) : 'true';
+  const orchEnabled = this.elements.orchestratorToggle?.checked === true;
+  if (this.elements.orchestratorProfileSelectGroup)
+    this.elements.orchestratorProfileSelectGroup.style.display = orchEnabled ? '' : 'none';
+  if (this.elements.showThinking) this.elements.showThinking.checked = settings.showThinking !== false;
+  if (this.elements.streamResponses) this.elements.streamResponses.checked = settings.streamResponses !== false;
+  if (this.elements.autoScroll) this.elements.autoScroll.checked = settings.autoScroll !== false;
+  if (this.elements.confirmActions) this.elements.confirmActions.checked = settings.confirmActions !== false;
+  if (this.elements.saveHistory) this.elements.saveHistory.checked = settings.saveHistory !== false;
+  if (this.elements.autoSaveSession)
+    this.elements.autoSaveSession.value =
+      settings.autoSaveSession !== undefined ? String(settings.autoSaveSession) : 'false';
+  const autoSaveFolderGroup = document.getElementById('autoSaveFolderGroup');
+  if (autoSaveFolderGroup) {
+    autoSaveFolderGroup.style.display = this.elements.autoSaveSession?.value === 'true' ? '' : 'none';
+  }
   this.timelineCollapsed = settings.timelineCollapsed !== undefined ? settings.timelineCollapsed !== false : true;
 
-  if (this.elements.relayEnabled)
-    this.elements.relayEnabled.value = settings.relayEnabled !== undefined ? String(settings.relayEnabled) : 'false';
+  if (this.elements.relayEnabled) this.elements.relayEnabled.checked = settings.relayEnabled === true;
   if (this.elements.relayUrl) this.elements.relayUrl.value = settings.relayUrl || 'http://127.0.0.1:17373';
   if (this.elements.relayToken) this.elements.relayToken.value = settings.relayToken || '';
   this.updateRelayStatusFromSettings?.(settings);
@@ -327,24 +405,29 @@ const FONT_STYLE_WEIGHTS: Record<string, string> = {
     ...(settings.toolPermissions || {}),
   };
   this.toolPermissions = toolPermissions;
-  if (this.elements.permissionRead) this.elements.permissionRead.value = String(toolPermissions.read);
-  if (this.elements.permissionInteract) this.elements.permissionInteract.value = String(toolPermissions.interact);
-  if (this.elements.permissionNavigate) this.elements.permissionNavigate.value = String(toolPermissions.navigate);
-  if (this.elements.permissionTabs) this.elements.permissionTabs.value = String(toolPermissions.tabs);
+  if (this.elements.permissionRead) this.elements.permissionRead.checked = toolPermissions.read !== false;
+  if (this.elements.permissionInteract) this.elements.permissionInteract.checked = toolPermissions.interact !== false;
+  if (this.elements.permissionNavigate) this.elements.permissionNavigate.checked = toolPermissions.navigate !== false;
+  if (this.elements.permissionTabs) this.elements.permissionTabs.checked = toolPermissions.tabs !== false;
   if (this.elements.permissionScreenshots)
-    this.elements.permissionScreenshots.value = String(toolPermissions.screenshots);
+    this.elements.permissionScreenshots.checked = toolPermissions.screenshots !== false;
   if (this.elements.allowedDomains) this.elements.allowedDomains.value = settings.allowedDomains || '';
+
+  // Ensure OAuth providers (copilot, codex, claude, qwen) are in this.providers
+  // so they appear in the Model grid and profile dropdowns on startup.
+  await syncOAuthProfiles(this).catch(() => {});
 
   this.refreshConfigDropdown();
   this.setActiveConfig(this.currentConfig, true);
-  this.toggleCustomEndpoint();
   this.updateScreenshotToggleState();
-  this.editProfile(this.currentConfig, true);
+  this.populateGenerationTab?.();
   this.updatePromptSections?.();
+  this.renderTeamProfileList?.();
   await this.refreshAccountPanel?.({ silent: true });
+  this.syncAccountAvatar?.();
 };
 
-(SidePanelUI.prototype as any).updateRelayStatusFromSettings = function updateRelayStatusFromSettings(
+sidePanelProto.updateRelayStatusFromSettings = function updateRelayStatusFromSettings(
   settings: Record<string, any> = {},
 ) {
   const connected = settings.relayConnected === true;
@@ -358,118 +441,20 @@ const FONT_STYLE_WEIGHTS: Record<string, string> = {
   }
 };
 
-(SidePanelUI.prototype as any).saveSettings = async function saveSettings() {
-  if (
-    (this.elements.provider?.value === 'custom' || this.elements.provider?.value === 'kimi' || this.elements.provider?.value === 'openrouter') &&
-    !this.validateCustomEndpoint()
-  ) {
-    this.updateStatus('Invalid custom endpoint URL', 'error');
-    return;
-  }
-  if (!this.validateCustomHeaders()) {
-    this.updateStatus('Invalid headers JSON', 'error');
-    return;
-  }
-  const profile = this.collectCurrentFormProfile();
-  this.configs[this.currentConfig] = profile;
+sidePanelProto.saveSettings = async function saveSettings() {
   this.savePromptSections?.();
   await this.persistAllSettings();
-
-  // Refresh models after saving settings
-  this.fetchAvailableModels();
-
+  this.populateModelSelect?.();
+  this.updateModelDisplay?.();
   this.updateStatus('Settings saved successfully', 'success');
+  this.openChatView?.();
 };
 
-(SidePanelUI.prototype as any).exportSettings = async function exportSettings() {
-  try {
-    const settings = await chrome.storage.local.get(PARCHI_STORAGE_KEYS as unknown as string[]);
-    const payload = {
-      ...settings,
-      exportedAt: new Date().toISOString(),
-      exportVersion: 1,
-    };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], {
-      type: 'application/json',
-    });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = `parchi-settings-${new Date().toISOString().slice(0, 10)}.json`;
-    anchor.click();
-    URL.revokeObjectURL(url);
-    this.updateStatus('Settings export downloaded', 'success');
-  } catch (error) {
-    this.updateStatus('Unable to export settings', 'error');
-  }
+sidePanelProto.collectCurrentFormProfile = function collectCurrentFormProfile() {
+  return this.configs[this.currentConfig] || {};
 };
 
-(SidePanelUI.prototype as any).importSettings = async function importSettings(event: Event) {
-  const input = event?.target as HTMLInputElement | null;
-  const file = input?.files?.[0];
-  if (!file) return;
-  try {
-    const text = await file.text();
-    const data = JSON.parse(text);
-    const payload: Record<string, any> = {};
-    (PARCHI_STORAGE_KEYS as unknown as string[]).forEach((key) => {
-      if (data[key] !== undefined) {
-        payload[key] = data[key];
-      }
-    });
-    if (payload.configs && typeof payload.configs !== 'object') {
-      throw new Error('Invalid configs payload');
-    }
-    await chrome.storage.local.set(payload);
-    await this.loadSettings();
-    this.renderProfileGrid();
-    this.updateStatus('Settings imported successfully', 'success');
-  } catch (error) {
-    this.updateStatus('Unable to import settings', 'error');
-  } finally {
-    if (input) input.value = '';
-  }
-};
-
-(SidePanelUI.prototype as any).collectCurrentFormProfile = function collectCurrentFormProfile() {
-  const current = this.configs[this.currentConfig] || {};
-  let extraHeaders = current.extraHeaders || {};
-  if (this.elements.customHeaders) {
-    const raw = this.elements.customHeaders.value || '';
-    if (raw.trim().length > 0) {
-      try {
-        extraHeaders = parseHeadersJson(raw);
-      } catch {
-        extraHeaders = current.extraHeaders || {};
-      }
-    } else {
-      extraHeaders = {};
-    }
-  }
-  return {
-    provider: this.elements.provider?.value ?? current.provider ?? '',
-    apiKey: this.elements.apiKey?.value ?? current.apiKey ?? '',
-    model: this.elements.model?.value ?? current.model ?? '',
-    customEndpoint: this.elements.customEndpoint?.value ?? current.customEndpoint ?? '',
-    extraHeaders,
-    systemPrompt: this.elements.systemPrompt?.value || current.systemPrompt || '',
-    temperature: Number.parseFloat(this.elements.temperature?.value) || current.temperature || 0.7,
-    maxTokens: Number.parseInt(this.elements.maxTokens?.value) || current.maxTokens || 4096,
-    contextLimit: Number.parseInt(this.elements.contextLimit?.value) || current.contextLimit || 200000,
-    timeout: Number.parseInt(this.elements.timeout?.value) || current.timeout || 30000,
-    enableScreenshots: this.elements.enableScreenshots?.value === 'true' || current.enableScreenshots || false,
-    sendScreenshotsAsImages:
-      this.elements.sendScreenshotsAsImages?.value === 'true' || current.sendScreenshotsAsImages || false,
-    screenshotQuality: this.elements.screenshotQuality?.value || current.screenshotQuality || 'high',
-    showThinking: this.elements.showThinking?.value === 'true',
-    streamResponses: this.elements.streamResponses?.value === 'true',
-    autoScroll: this.elements.autoScroll?.value === 'true',
-    confirmActions: this.elements.confirmActions?.value === 'true',
-    saveHistory: this.elements.saveHistory?.value === 'true',
-  };
-};
-
-(SidePanelUI.prototype as any).collectToolPermissions = function collectToolPermissions() {
+sidePanelProto.collectToolPermissions = function collectToolPermissions() {
   const fallback = this.toolPermissions || {
     read: true,
     interact: true,
@@ -478,37 +463,45 @@ const FONT_STYLE_WEIGHTS: Record<string, string> = {
     screenshots: true,
   };
   return {
-    read: this.elements.permissionRead ? this.elements.permissionRead.value !== 'false' : fallback.read !== false,
+    read: this.elements.permissionRead ? this.elements.permissionRead.checked !== false : fallback.read !== false,
     interact: this.elements.permissionInteract
-      ? this.elements.permissionInteract.value !== 'false'
+      ? this.elements.permissionInteract.checked !== false
       : fallback.interact !== false,
     navigate: this.elements.permissionNavigate
-      ? this.elements.permissionNavigate.value !== 'false'
+      ? this.elements.permissionNavigate.checked !== false
       : fallback.navigate !== false,
-    tabs: this.elements.permissionTabs ? this.elements.permissionTabs.value !== 'false' : fallback.tabs !== false,
+    tabs: this.elements.permissionTabs ? this.elements.permissionTabs.checked !== false : fallback.tabs !== false,
     screenshots: this.elements.permissionScreenshots
-      ? this.elements.permissionScreenshots.value === 'true'
+      ? this.elements.permissionScreenshots.checked !== false
       : fallback.screenshots !== false,
   };
 };
 
-(SidePanelUI.prototype as any).persistAllSettings = async function persistAllSettings({ silent = false } = {}) {
+sidePanelProto.persistAllSettings = async function persistAllSettings({ silent = false } = {}) {
   try {
-    const activeProfile = this.configs[this.currentConfig] || {};
+    const activeProfile = materializeProfileWithProvider(
+      { providers: this.providers, configs: this.configs },
+      this.currentConfig,
+      this.configs[this.currentConfig] || {},
+    );
     const rawRelayUrl = (this.elements.relayUrl?.value || '').trim();
     const normalizedRelayUrl = rawRelayUrl && !rawRelayUrl.includes('://') ? `http://${rawRelayUrl}` : rawRelayUrl;
-    const payload = {
+    // Write flat top-level keys for backward compatibility with BackgroundService.resolveProfile
+    const payload: Record<string, any> = {
+      providers: this.providers || {},
+      providerId: activeProfile.providerId ?? '',
       provider: activeProfile.provider ?? '',
       apiKey: activeProfile.apiKey ?? '',
+      modelId: activeProfile.modelId ?? activeProfile.model ?? '',
       model: activeProfile.model ?? '',
       customEndpoint: activeProfile.customEndpoint ?? '',
       extraHeaders: activeProfile.extraHeaders || {},
       systemPrompt: activeProfile.systemPrompt || this.getDefaultSystemPrompt(),
       temperature: activeProfile.temperature ?? 0.7,
-      maxTokens: activeProfile.maxTokens || 4096,
-      contextLimit: activeProfile.contextLimit || 200000,
-      timeout: activeProfile.timeout || 30000,
-      enableScreenshots: activeProfile.enableScreenshots ?? false,
+      maxTokens: activeProfile.maxTokens ?? 4096,
+      contextLimit: activeProfile.contextLimit ?? 200000,
+      timeout: activeProfile.timeout ?? 30000,
+      enableScreenshots: activeProfile.enableScreenshots ?? true,
       sendScreenshotsAsImages: activeProfile.sendScreenshotsAsImages ?? false,
       screenshotQuality: activeProfile.screenshotQuality || 'high',
       showThinking: activeProfile.showThinking !== false,
@@ -516,9 +509,10 @@ const FONT_STYLE_WEIGHTS: Record<string, string> = {
       autoScroll: activeProfile.autoScroll !== false,
       confirmActions: activeProfile.confirmActions !== false,
       saveHistory: activeProfile.saveHistory !== false,
-      visionBridge: this.elements.visionBridge?.value === 'true',
+      autoSaveSession: this.elements.autoSaveSession?.value === 'true',
+      visionBridge: this.elements.visionBridge?.checked !== false,
       visionProfile: this.elements.visionProfile?.value || '',
-      useOrchestrator: this.elements.orchestratorToggle?.value === 'true',
+      useOrchestrator: this.elements.orchestratorToggle?.checked === true,
       orchestratorProfile: this.elements.orchestratorProfile?.value || '',
       toolPermissions: this.collectToolPermissions(),
       allowedDomains: this.elements.allowedDomains?.value || '',
@@ -527,14 +521,15 @@ const FONT_STYLE_WEIGHTS: Record<string, string> = {
       fontPreset: this.fontPreset || 'default',
       fontStylePreset: this.fontStylePreset || 'normal',
       theme: this.currentTheme || DEFAULT_THEME_ID,
-      relayEnabled: this.elements.relayEnabled?.value === 'true',
+      relayEnabled: this.elements.relayEnabled?.checked === true,
       relayUrl: normalizedRelayUrl,
       relayToken: this.elements.relayToken?.value || '',
       activeConfig: this.currentConfig,
       configs: this.configs,
+      controllers: [],
     };
-    await chrome.storage.local.set(payload);
-    this.updateContextUsage();
+    await replaceSettingsStoreSnapshot(payload);
+    this.updateContextUsage?.();
     if (!silent) {
       this.updateStatus('Settings saved successfully', 'success');
     }
@@ -547,45 +542,62 @@ const FONT_STYLE_WEIGHTS: Record<string, string> = {
   }
 };
 
-(SidePanelUI.prototype as any).getDefaultSystemPrompt = function getDefaultSystemPrompt() {
+sidePanelProto.getDefaultSystemPrompt = function getDefaultSystemPrompt() {
   return DEFAULT_AGENT_SYSTEM_PROMPT;
 };
 
-(SidePanelUI.prototype as any).renderThemeGrid = function renderThemeGrid() {
-  const grid = this.elements.themeGrid;
-  if (!grid) return;
-  grid.innerHTML = '';
-  for (const theme of THEMES) {
-    const swatch = document.createElement('button');
-    swatch.className = 'theme-swatch';
-    if (theme.id === this.currentTheme) swatch.classList.add('active');
-    swatch.title = theme.name;
-    swatch.dataset.themeId = theme.id;
-    swatch.innerHTML = `
-      <span class="theme-swatch-color" style="background:${theme.preview.bg}; border-color:${theme.preview.accent}">
-        <span class="theme-swatch-accent" style="background:${theme.preview.accent}"></span>
-      </span>
-      <span class="theme-swatch-label">${theme.name}</span>
-    `;
-    swatch.addEventListener('click', () => this.setTheme(theme.id));
-    grid.appendChild(swatch);
+sidePanelProto.renderThemeGrid = function renderThemeGrid() {
+  const select = this.elements.themeSelect as HTMLSelectElement | null;
+  const preview = this.elements.themePreview as HTMLElement | null;
+  if (!select) return;
+
+  select.innerHTML = THEMES.map(
+    (theme) => `<option value="${this.escapeHtml(theme.id)}">${this.escapeHtml(theme.name)}</option>`,
+  ).join('');
+
+  const activeThemeId = getThemeById(this.currentTheme || '') ? this.currentTheme : THEMES[0]?.id || DEFAULT_THEME_ID;
+  this.currentTheme = activeThemeId;
+  select.value = activeThemeId;
+
+  if (preview) {
+    const activeTheme = getThemeById(activeThemeId) || THEMES[0];
+    if (activeTheme) {
+      preview.innerHTML = `
+        <div class="theme-preview-pill">
+          <span class="theme-preview-dot" style="background:${activeTheme.preview.bg}; border-color:${activeTheme.preview.accent};"></span>
+          <span class="theme-preview-name">${this.escapeHtml(activeTheme.name)}</span>
+          <span class="theme-preview-count">${THEMES.length} themes</span>
+        </div>
+        <div class="theme-preview-swatches">
+          <span class="theme-preview-swatch" style="background:${activeTheme.preview.bg}" title="Background"></span>
+          <span class="theme-preview-swatch" style="background:${activeTheme.preview.card}" title="Surface"></span>
+          <span class="theme-preview-swatch" style="background:${activeTheme.preview.accent}" title="Accent"></span>
+          <span class="theme-preview-swatch theme-preview-foreground" style="background:${activeTheme.vars['--foreground'] || '#ffffff'}" title="Text"></span>
+        </div>
+      `;
+    }
+  }
+
+  if (select.dataset.bound !== 'true') {
+    select.addEventListener('change', () => this.setTheme(select.value));
+    select.dataset.bound = 'true';
   }
 };
 
-(SidePanelUI.prototype as any).setTheme = function setTheme(id: string) {
+sidePanelProto.setTheme = function setTheme(id: string) {
   this.currentTheme = id;
   applyTheme(id);
   this.renderThemeGrid();
-  chrome.storage.local.set({ theme: id }).catch(() => {});
+  void patchSettingsStoreSnapshot({ theme: id }).catch(() => {});
 };
 
-(SidePanelUI.prototype as any).updateScreenshotToggleState = function updateScreenshotToggleState() {
-  if (!this.elements.enableScreenshots) return;
-  const wantsScreens = this.elements.enableScreenshots.value === 'true';
+sidePanelProto.updateScreenshotToggleState = function updateScreenshotToggleState() {
+  const activeProfile = this.configs?.[this.currentConfig] || {};
+  const wantsScreens = activeProfile.enableScreenshots !== false;
   const visionProfile = this.elements.visionProfile?.value;
-  const provider = this.elements.provider?.value;
+  const provider = activeProfile.provider;
   const hasVision = (provider && provider !== 'custom') || visionProfile;
-  const controls = [this.elements.sendScreenshotsAsImages, this.elements.screenshotQuality];
+  const controls: Array<any> = [];
   controls.forEach((ctrl) => {
     if (!ctrl) return;
     ctrl.disabled = !wantsScreens;
@@ -600,7 +612,7 @@ const FONT_STYLE_WEIGHTS: Record<string, string> = {
    Orchestrator / Vision prompt sections in Prompt tab
    ============================================================================ */
 
-(SidePanelUI.prototype as any).updatePromptSections = function updatePromptSections() {
+sidePanelProto.updatePromptSections = function updatePromptSections() {
   // Re-query elements in case they weren't available at constructor time (loaded via template)
   const orchSection = this.elements.orchestratorPromptSection || document.getElementById('orchestratorPromptSection');
   const orchTextarea =
@@ -618,7 +630,7 @@ const FONT_STYLE_WEIGHTS: Record<string, string> = {
   if (visTextarea) this.elements.visionPromptTextarea = visTextarea;
 
   // Orchestrator
-  const orchEnabled = this.elements.orchestratorToggle?.value === 'true';
+  const orchEnabled = this.elements.orchestratorToggle?.checked === true;
   const orchProfileName = this.elements.orchestratorProfile?.value || this.currentConfig;
   if (orchSection) {
     orchSection.classList.toggle('hidden', !orchEnabled);
@@ -640,9 +652,9 @@ const FONT_STYLE_WEIGHTS: Record<string, string> = {
   }
 };
 
-(SidePanelUI.prototype as any).savePromptSections = function savePromptSections() {
+sidePanelProto.savePromptSections = function savePromptSections() {
   // Save orchestrator prompt back to its profile
-  const orchEnabled = this.elements.orchestratorToggle?.value === 'true';
+  const orchEnabled = this.elements.orchestratorToggle?.checked === true;
   if (orchEnabled && this.elements.orchestratorPromptTextarea) {
     const orchProfileName = this.elements.orchestratorProfile?.value || this.currentConfig;
     if (this.configs[orchProfileName]) {

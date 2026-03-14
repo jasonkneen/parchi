@@ -1,4 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Nunito+Sans:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Geist:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Manrope:wght@400;500;600;700&family=Nunito+Sans:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap");
 
 /* Parchi — Modern Void Design System (Dark) */
 
@@ -9,8 +9,9 @@
   --muted: #a1a1aa;
   --muted-dim: #71717a;
   --border: #27272a;
-  --card: #18181b;
-  --card-hover: #1f1f23;
+  --card: #131315;
+  --card-hover: #1a1a1d;
+  --card-inset: #131316;
 
   /* Accent — indigo with presence */
   --accent: #818cf8;
@@ -20,8 +21,11 @@
 
   /* Status — vivid and clear */
   --success: #4ade80;
+  --success-rgb: 74 222 128;
   --warning: #fbbf24;
+  --warning-rgb: 251 191 36;
   --error: #f87171;
+  --error-rgb: 248 113 113;
 
   /* Ink system — layered transparency */
   --ink-1: rgba(255, 255, 255, 0.05);
@@ -38,6 +42,9 @@
   --font-sans-default: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
   --font-sans-geist: "Geist", "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
   --font-sans-soft: "Nunito Sans", "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+  --font-sans-dm: "DM Sans", system-ui, -apple-system, sans-serif;
+  --font-sans-plex: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+  --font-sans-manrope: "Manrope", system-ui, -apple-system, sans-serif;
   --font-sans: var(--font-sans-default);
   --font-mono: "JetBrains Mono", "SF Mono", monospace;
   --font-base-weight: 400;

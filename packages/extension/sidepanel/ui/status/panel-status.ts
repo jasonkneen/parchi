@@ -1,10 +1,21 @@
+import { fetchProviderModels } from '../../../oauth/manager.js';
+import { getAllProviderStates } from '../../../oauth/store.js';
+import type { OAuthProviderKey } from '../../../oauth/types.js';
+import {
+  ensureProviderModel,
+  getProviderInstance,
+  listProviderInstances,
+  materializeProfileWithProvider,
+} from '../../../state/provider-registry.js';
 import { SidePanelUI } from '../core/panel-ui.js';
+const sidePanelProto = SidePanelUI.prototype as SidePanelUI & Record<string, unknown>;
 
 const MODEL_CATALOG_TTL_MS = 3 * 60 * 1000;
 const MODEL_FETCH_TIMEOUT_MS = 9000;
 const MAX_MODELS_PER_PROVIDER = 250;
 const MAX_MODELS_TOTAL = 600;
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
+const MODEL_SELECT_VALUE_SEPARATOR = '::';
 
 type ModelCatalogTarget = {
   key: string;
@@ -13,7 +24,10 @@ type ModelCatalogTarget = {
   headers: Record<string, string>;
 };
 
-const normalizeProvider = (provider: unknown) => String(provider || '').trim().toLowerCase();
+const normalizeProvider = (provider: unknown) =>
+  String(provider || '')
+    .trim()
+    .toLowerCase();
 
 const normalizeHeaders = (value: unknown): Record<string, string> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
@@ -29,13 +43,17 @@ const normalizeEndpointBase = (provider: string, customEndpoint: string) => {
   const fallback =
     provider === 'openrouter' || provider === 'parchi'
       ? OPENROUTER_BASE_URL
-      : provider === 'openai'
-        ? 'https://api.openai.com/v1'
-        : provider === 'anthropic'
-          ? 'https://api.anthropic.com/v1'
-          : provider === 'kimi'
-            ? 'https://api.kimi.com/coding/v1'
-            : '';
+      : provider === 'glm'
+        ? 'https://api.z.ai/api/anthropic'
+        : provider === 'minimax'
+          ? 'https://api.minimax.io/anthropic'
+          : provider === 'openai'
+            ? 'https://api.openai.com/v1'
+            : provider === 'anthropic'
+              ? 'https://api.anthropic.com/v1'
+              : provider === 'kimi'
+                ? 'https://api.kimi.com/coding/v1'
+                : '';
 
   const base = (raw || fallback)
     .replace(/\/chat\/completions\/?$/i, '')
@@ -47,12 +65,26 @@ const normalizeEndpointBase = (provider: string, customEndpoint: string) => {
 };
 
 const buildModelEndpointCandidates = (base: string): string[] => {
-  const normalized = String(base || '').trim().replace(/\/+$/, '');
+  const normalized = String(base || '')
+    .trim()
+    .replace(/\/+$/, '');
   if (!normalized) return [];
   if (/\/v1$/i.test(normalized) || /\/api\/v1$/i.test(normalized)) {
     return [`${normalized}/models`];
   }
   return [`${normalized}/models`, `${normalized}/v1/models`];
+};
+
+const encodeModelSelectValue = (providerId: string, modelId: string) =>
+  `${encodeURIComponent(providerId)}${MODEL_SELECT_VALUE_SEPARATOR}${encodeURIComponent(modelId)}`;
+
+const decodeModelSelectValue = (value: string): { providerId: string; modelId: string } | null => {
+  const [providerId, modelId] = String(value || '').split(MODEL_SELECT_VALUE_SEPARATOR);
+  if (!providerId || !modelId) return null;
+  return {
+    providerId: decodeURIComponent(providerId),
+    modelId: decodeURIComponent(modelId),
+  };
 };
 
 const extractModelIds = (payload: any): string[] => {
@@ -78,6 +110,59 @@ const extractModelIds = (payload: any): string[] => {
   return Array.from(new Set(ids));
 };
 
+const populateModelSelectElement = (
+  select: HTMLSelectElement,
+  models: string[],
+  currentValue: string,
+  placeholder = 'Select model...',
+  datalist?: HTMLDataListElement | null,
+) => {
+  const prevValue = select.value || currentValue;
+  select.innerHTML = '';
+
+  const placeholderOpt = document.createElement('option');
+  placeholderOpt.value = '';
+  placeholderOpt.textContent = placeholder;
+  select.appendChild(placeholderOpt);
+
+  // Always include current value even if not in fetched list
+  if (prevValue && !models.includes(prevValue)) {
+    const opt = document.createElement('option');
+    opt.value = prevValue;
+    opt.textContent = prevValue;
+    select.appendChild(opt);
+  }
+
+  for (const model of models) {
+    const opt = document.createElement('option');
+    opt.value = model;
+    opt.textContent = model;
+    select.appendChild(opt);
+  }
+
+  if (prevValue) {
+    select.value = prevValue;
+  }
+
+  if (datalist) {
+    datalist.innerHTML = '';
+    for (const model of models) {
+      const option = document.createElement('option');
+      option.value = model;
+      datalist.appendChild(option);
+    }
+  }
+};
+
+const populateModelSuggestionList = (list: HTMLDataListElement, models: string[]) => {
+  list.innerHTML = '';
+  for (const model of models) {
+    const option = document.createElement('option');
+    option.value = model;
+    list.appendChild(option);
+  }
+};
+
 const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number): Promise<T> => {
   let timerId: number | null = null;
   try {
@@ -94,7 +179,7 @@ const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number): Promise<T
   }
 };
 
-(SidePanelUI.prototype as any).updateStatus = function updateStatus(text: string, type = 'default') {
+sidePanelProto.updateStatus = function updateStatus(text: string, type = 'default') {
   if (this.elements.statusText) {
     this.elements.statusText.textContent = text;
   }
@@ -108,7 +193,7 @@ const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number): Promise<T
   this.updateActivityState();
 };
 
-(SidePanelUI.prototype as any).startRunTimer = function startRunTimer() {
+sidePanelProto.startRunTimer = function startRunTimer() {
   if (this.runTimerId) {
     window.clearInterval(this.runTimerId);
   }
@@ -120,7 +205,7 @@ const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number): Promise<T
   this.runTimerId = window.setInterval(tick, 1000);
 };
 
-(SidePanelUI.prototype as any).stopRunTimer = function stopRunTimer() {
+sidePanelProto.stopRunTimer = function stopRunTimer() {
   if (this.runTimerId) {
     window.clearInterval(this.runTimerId);
     this.runTimerId = null;
@@ -129,38 +214,55 @@ const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number): Promise<T
   this.updateActivityState?.();
 };
 
-(SidePanelUI.prototype as any).updateModelDisplay = function updateModelDisplay() {
-  // Now the model select shows profiles, so we update it to the current config
-  if (this.elements.modelSelect) {
-    this.elements.modelSelect.value = this.currentConfig;
-  }
+sidePanelProto.updateModelDisplay = function updateModelDisplay() {
+  const select = this.elements.modelSelect;
+  if (!select) return;
+  const activeConfig = materializeProfileWithProvider(
+    { providers: this.providers, configs: this.configs },
+    this.currentConfig,
+    this.configs?.[this.currentConfig] || {},
+  );
+  const providerId = String(activeConfig?.providerId || '').trim();
+  const modelId = String(activeConfig?.modelId || activeConfig?.model || '').trim();
+  if (!providerId || !modelId) return;
+  select.value = encodeModelSelectValue(providerId, modelId);
 };
 
-(SidePanelUI.prototype as any).fetchAvailableModels = async function fetchAvailableModels() {
+sidePanelProto.fetchAvailableModels = async function fetchAvailableModels() {
   this.populateModelSelect();
   this.updateModelDisplay();
   await this.refreshModelCatalog();
 };
 
-(SidePanelUI.prototype as any).collectConfiguredModelFallbacks = function collectConfiguredModelFallbacks() {
+sidePanelProto.collectConfiguredModelFallbacks = function collectConfiguredModelFallbacks() {
   const fallbacks: Array<{ provider: string; model: string }> = [];
   const configs = this.configs && typeof this.configs === 'object' ? this.configs : {};
-  for (const profile of Object.values(configs)) {
+  for (const [name, rawProfile] of Object.entries(configs)) {
+    const profile = materializeProfileWithProvider(
+      { providers: this.providers, configs: this.configs },
+      name,
+      rawProfile,
+    );
     if (!profile || typeof profile !== 'object') continue;
     const provider = normalizeProvider((profile as any).provider);
-    const model = String((profile as any).model || '').trim();
+    const model = String((profile as any).modelId || (profile as any).model || '').trim();
     if (!provider || !model) continue;
     fallbacks.push({ provider, model });
   }
   return fallbacks;
 };
 
-(SidePanelUI.prototype as any).collectModelCatalogTargets = async function collectModelCatalogTargets() {
+sidePanelProto.collectModelCatalogTargets = async function collectModelCatalogTargets() {
   const targets: ModelCatalogTarget[] = [];
   const seen = new Set<string>();
   const configs = this.configs && typeof this.configs === 'object' ? this.configs : {};
 
-  for (const profile of Object.values(configs)) {
+  for (const [name, rawProfile] of Object.entries(configs)) {
+    const profile = materializeProfileWithProvider(
+      { providers: this.providers, configs: this.configs },
+      name,
+      rawProfile,
+    );
     if (!profile || typeof profile !== 'object') continue;
     const provider = normalizeProvider((profile as any).provider);
     if (!provider) continue;
@@ -206,9 +308,7 @@ const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number): Promise<T
   return targets;
 };
 
-(SidePanelUI.prototype as any).fetchModelIdsForTarget = async function fetchModelIdsForTarget(
-  target: ModelCatalogTarget,
-) {
+sidePanelProto.fetchModelIdsForTarget = async function fetchModelIdsForTarget(target: ModelCatalogTarget) {
   const urls = buildModelEndpointCandidates(target.endpointBase);
   for (const url of urls) {
     try {
@@ -230,10 +330,7 @@ const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number): Promise<T
   return [];
 };
 
-(SidePanelUI.prototype as any).applyModelSuggestions = function applyModelSuggestions() {
-  const datalist = document.getElementById('modelSuggestions') as HTMLDataListElement | null;
-  if (!datalist) return;
-
+sidePanelProto.applyModelSuggestions = function applyModelSuggestions() {
   const entries = Array.isArray(this.modelCatalogEntries) ? this.modelCatalogEntries : [];
   const deduped = new Map<string, string>();
   for (const entry of entries) {
@@ -249,24 +346,42 @@ const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number): Promise<T
     .map(([model, provider]) => ({ model, provider }))
     .sort((a, b) => a.model.localeCompare(b.model));
 
-  datalist.innerHTML = '';
-  for (const item of ordered.slice(0, MAX_MODELS_TOTAL)) {
-    const option = document.createElement('option');
-    option.value = item.model;
-    option.label = item.provider;
-    datalist.appendChild(option);
+  // Populate Setup tab model suggestions for the active provider only.
+  const modelInput = this.elements.model as HTMLInputElement | null;
+  const modelSuggestions =
+    this.elements.modelSuggestions || (document.getElementById('modelSuggestions') as HTMLDataListElement | null);
+  const activeProfile = materializeProfileWithProvider(
+    { providers: this.providers, configs: this.configs },
+    this.currentConfig,
+    this.configs?.[this.currentConfig] || {},
+  );
+  const activeProvider = normalizeProvider(activeProfile.provider);
+  const providerScoped = activeProvider ? ordered.filter((item) => item.provider === activeProvider) : ordered;
+  const providerModels = providerScoped.slice(0, MAX_MODELS_TOTAL).map((item) => item.model);
+
+  if (modelSuggestions) {
+    populateModelSuggestionList(modelSuggestions, providerModels);
   }
 
-  if (this.elements.model) this.elements.model.setAttribute('list', 'modelSuggestions');
-  // Profile editor model uses its own picker, not the global datalist
+  if (modelInput) {
+    const currentModel = String(modelInput.value || activeProfile.model || '').trim();
+    modelInput.value = currentModel;
+  }
 
-  if (this.elements.modelHint && ordered.length > 0) {
-    const providerCount = new Set(ordered.map((item) => item.provider)).size;
-    this.elements.modelHint.textContent = `Discovered ${ordered.length} models across ${providerCount} providers.`;
+  if (!this.elements.modelHint) return;
+  if (activeProvider === 'custom') {
+    this.elements.modelHint.textContent =
+      providerModels.length > 0
+        ? `Discovered ${providerModels.length} custom model${providerModels.length === 1 ? '' : 's'} from your endpoint.`
+        : 'Type a model ID. Suggestions appear when your endpoint responds to /models or /v1/models.';
+    return;
+  }
+  if (providerModels.length > 0) {
+    this.elements.modelHint.textContent = `Discovered ${providerModels.length} models for ${activeProvider}.`;
   }
 };
 
-(SidePanelUI.prototype as any).refreshModelCatalog = async function refreshModelCatalog({ force = false } = {}) {
+sidePanelProto.refreshModelCatalog = async function refreshModelCatalog({ force = false } = {}) {
   const now = Date.now();
   const hasFreshCatalog =
     !force &&
@@ -286,6 +401,25 @@ const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number): Promise<T
 
   this.modelCatalogRefreshPromise = (async () => {
     const discovered: Array<{ provider: string; model: string }> = this.collectConfiguredModelFallbacks();
+
+    // Fetch models from connected OAuth providers via their APIs
+    try {
+      const oauthStates = await getAllProviderStates();
+      const oauthFetches = Object.entries(oauthStates)
+        .filter(([, state]) => state?.connected && state?.tokens?.accessToken)
+        .map(async ([key]) => {
+          const providerKey = `${key}-oauth`;
+          const models = await fetchProviderModels(key as OAuthProviderKey);
+          return { providerKey, models };
+        });
+      const oauthResults = await Promise.all(oauthFetches);
+      for (const { providerKey, models } of oauthResults) {
+        for (const modelId of models) {
+          discovered.push({ provider: providerKey, model: modelId });
+        }
+      }
+    } catch {}
+
     const targets = await this.collectModelCatalogTargets();
     const results = await Promise.all(
       targets.map(async (target) => {
@@ -327,7 +461,7 @@ const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number): Promise<T
   }
 };
 
-(SidePanelUI.prototype as any).populateModelSelect = function populateModelSelect() {
+sidePanelProto.populateModelSelect = function populateModelSelect() {
   // Try to get the select element - it might not be in this.elements if loaded dynamically
   let select = this.elements.modelSelect;
   if (!select) {
@@ -342,72 +476,153 @@ const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number): Promise<T
     return;
   }
 
-  // Populate with profiles
+  // Populate with connected provider/model pairs
   select.innerHTML = '';
 
-  const configNames = Object.keys(this.configs);
-  if (configNames.length === 0) {
+  const activeConfig = materializeProfileWithProvider(
+    { providers: this.providers, configs: this.configs },
+    this.currentConfig,
+    this.configs?.[this.currentConfig] || {},
+  );
+  const activeProviderId = String(activeConfig?.providerId || '').trim();
+  const activeProvider = String(activeConfig?.provider || '').trim();
+  const activeModelId = String(activeConfig?.modelId || activeConfig?.model || '').trim();
+  const providers = listProviderInstances({ providers: this.providers }).filter(
+    (provider) => provider.isConnected && Array.isArray(provider.models) && provider.models.length > 0,
+  );
+
+  if (providers.length === 0) {
     const option = document.createElement('option');
     option.value = '';
-    option.textContent = 'No profiles';
+    option.textContent = 'No connected models';
     select.appendChild(option);
     this.updateModelSelectorGlow();
     return;
   }
 
-  for (const name of configNames) {
-    const config = this.configs[name];
-    const option = document.createElement('option');
-    option.value = name; // Use profile name as value
+  const providerIndicators: Record<string, string> = {
+    anthropic: '◉',
+    openai: '○',
+    kimi: '◈',
+    codex: '◆',
+    copilot: '✓',
+    qwen: '◇',
+    glm: '□',
+    minimax: '△',
+    openrouter: '◎',
+    parchi: '☻',
+    custom: '◇',
+  };
 
-    // Format: icon provider/model (e.g., "🅒 anthropic/claude-sonnet")
-    const providerIcon = this.getProviderIcon(config.provider);
-    const providerLabel = config.provider || 'unconfigured';
-    const modelShort = this.shortenModelName(config.model || 'no-model');
-    option.textContent = `${providerIcon} ${providerLabel}/${modelShort}`;
-
-    if (name === this.currentConfig) {
-      option.selected = true;
+  let matchedActiveOption = false;
+  for (const provider of providers) {
+    const optgroup = document.createElement('optgroup');
+    optgroup.label = provider.name;
+    const indicator = providerIndicators[provider.providerType.replace(/-oauth$/, '').toLowerCase()] || '◇';
+    for (const model of provider.models) {
+      const option = document.createElement('option');
+      option.value = encodeModelSelectValue(provider.id, model.id);
+      option.textContent = `${indicator} ${provider.name}/${model.label || model.id}`;
+      const isSelected = provider.id === activeProviderId && model.id === activeModelId;
+      if (isSelected) {
+        option.selected = true;
+        matchedActiveOption = true;
+      }
+      optgroup.appendChild(option);
     }
-    select.appendChild(option);
+    select.appendChild(optgroup);
+  }
+
+  if (!matchedActiveOption && activeModelId) {
+    const fallbackOption = document.createElement('option');
+    fallbackOption.value =
+      activeProviderId && activeModelId ? encodeModelSelectValue(activeProviderId, activeModelId) : '';
+    fallbackOption.textContent = `${activeProvider || 'current'}/${activeModelId}`;
+    fallbackOption.selected = true;
+    select.insertBefore(fallbackOption, select.firstChild);
   }
 
   this.updateModelSelectorGlow();
 };
 
-(SidePanelUI.prototype as any).refreshModelCatalogForProfileEditor = async function refreshModelCatalogForProfileEditor() {
+sidePanelProto.refreshModelCatalogForProfileEditor = async function refreshModelCatalogForProfileEditor() {
   const providerEl = this.elements.profileEditorProvider;
-  const apiKeyEl = this.elements.profileEditorApiKey;
-  const endpointEl = this.elements.profileEditorEndpoint;
+  const modelSelect = this.elements.profileEditorModel as HTMLSelectElement | null;
+  const modelDatalist = this.elements.profileEditorModelList as HTMLDataListElement | null;
+  const modelInput = this.elements.profileEditorModelInput as HTMLInputElement | null;
   if (!providerEl) return;
 
-  const provider = String(providerEl.value || '').trim().toLowerCase();
+  const providerId = String(providerEl.value || '').trim();
+  const providerInstance = getProviderInstance({ providers: this.providers }, providerId);
+  const provider = String(providerInstance?.providerType || '')
+    .trim()
+    .toLowerCase();
+  const currentModel = String(modelInput?.value || modelSelect?.value || '').trim();
+
   if (!provider) {
     this._profileEditorModels = [];
-    this.renderModelPickerList();
+    if (modelSelect) populateModelSelectElement(modelSelect, [], currentModel, 'Select model...', modelDatalist);
     return;
   }
 
-  const apiKey = String(apiKeyEl?.value || '').trim();
-  const customEndpoint = String(endpointEl?.value || '').trim();
+  // OAuth providers - fetch models from their APIs
+  if (provider.endsWith('-oauth')) {
+    const baseKey = provider.replace(/-oauth$/, '') as OAuthProviderKey;
+    if (modelSelect) {
+      const loadingOpt = document.createElement('option');
+      loadingOpt.value = currentModel;
+      loadingOpt.textContent = 'Fetching models...';
+      modelSelect.innerHTML = '';
+      modelSelect.appendChild(loadingOpt);
+    }
+    try {
+      const modelIds = await fetchProviderModels(baseKey);
+      this._profileEditorModels = modelIds.sort((a: string, b: string) => a.localeCompare(b));
+      if (providerInstance && modelIds.length > 0) {
+        let nextProvider = providerInstance;
+        for (const modelId of modelIds) nextProvider = ensureProviderModel(nextProvider, modelId);
+        this.providers = { ...(this.providers || {}), [nextProvider.id]: nextProvider };
+      }
+    } catch {
+      this._profileEditorModels = [];
+    }
+    if (modelSelect) {
+      populateModelSelectElement(
+        modelSelect,
+        this._profileEditorModels,
+        currentModel,
+        'Select model...',
+        modelDatalist,
+      );
+    }
+    return;
+  }
+
+  const apiKey = String(providerInstance?.apiKey || '').trim();
+  const customEndpoint = String(providerInstance?.customEndpoint || '').trim();
 
   const endpointBase = normalizeEndpointBase(provider, customEndpoint);
   if (!endpointBase) {
     this._profileEditorModels = [];
-    this.renderModelPickerList();
+    if (modelSelect) populateModelSelectElement(modelSelect, [], currentModel, 'Select model...', modelDatalist);
     return;
   }
 
   const allowsUnauthedList = provider === 'openrouter' || provider === 'parchi';
   if (!apiKey && !allowsUnauthedList) {
     this._profileEditorModels = [];
-    this.renderModelPickerList();
+    if (modelSelect) populateModelSelectElement(modelSelect, [], currentModel, 'Select model...', modelDatalist);
     return;
   }
 
   // Show loading state
-  const listEl = document.getElementById('modelPickerList');
-  if (listEl) listEl.innerHTML = '<div class="model-picker-loading">Fetching models...</div>';
+  if (modelSelect) {
+    const loadingOpt = document.createElement('option');
+    loadingOpt.value = currentModel;
+    loadingOpt.textContent = 'Fetching models...';
+    modelSelect.innerHTML = '';
+    modelSelect.appendChild(loadingOpt);
+  }
 
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (provider === 'anthropic' || provider === 'kimi') {
@@ -427,83 +642,35 @@ const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number): Promise<T
   try {
     const modelIds = await this.fetchModelIdsForTarget(target);
     this._profileEditorModels = modelIds.sort((a: string, b: string) => a.localeCompare(b));
+    if (providerInstance && modelIds.length > 0) {
+      let nextProvider = providerInstance;
+      for (const modelId of modelIds) nextProvider = ensureProviderModel(nextProvider, modelId);
+      this.providers = { ...(this.providers || {}), [nextProvider.id]: nextProvider };
+    }
   } catch {
     this._profileEditorModels = [];
   }
-  this.renderModelPickerList();
-};
-
-(SidePanelUI.prototype as any).renderModelPickerList = function renderModelPickerList(filter?: string) {
-  const listEl = document.getElementById('modelPickerList');
-  if (!listEl) return;
-
-  const models: string[] = Array.isArray(this._profileEditorModels) ? this._profileEditorModels : [];
-  const currentModel = String(this.elements.profileEditorModel?.value || '').trim();
-  const query = (filter ?? '').trim().toLowerCase();
-
-  if (!models.length) {
-    listEl.innerHTML = '<div class="model-picker-empty">No models found. Check provider, endpoint, and API key.</div>';
-    return;
-  }
-
-  const filtered = query ? models.filter((m: string) => m.toLowerCase().includes(query)) : models;
-
-  if (!filtered.length) {
-    listEl.innerHTML = '<div class="model-picker-empty">No models match filter</div>';
-    return;
-  }
-
-  listEl.innerHTML = '';
-  for (const model of filtered) {
-    const item = document.createElement('div');
-    item.className = 'model-picker-item';
-    if (model === currentModel) item.classList.add('selected');
-    item.dataset.model = model;
-
-    if (query) {
-      const idx = model.toLowerCase().indexOf(query);
-      const before = model.slice(0, idx);
-      const match = model.slice(idx, idx + query.length);
-      const after = model.slice(idx + query.length);
-      item.innerHTML = `${escapeModelHtml(before)}<mark>${escapeModelHtml(match)}</mark>${escapeModelHtml(after)}`;
-    } else {
-      item.textContent = model;
-    }
-
-    listEl.appendChild(item);
+  if (modelSelect) {
+    populateModelSelectElement(modelSelect, this._profileEditorModels, currentModel, 'Select model...', modelDatalist);
   }
 };
 
-(SidePanelUI.prototype as any).showModelPicker = function showModelPicker() {
-  const dropdown = document.getElementById('modelPickerDropdown');
-  if (!dropdown || !dropdown.classList.contains('hidden')) return;
-  dropdown.classList.remove('hidden');
-  const filterInput = document.getElementById('modelPickerFilter') as HTMLInputElement | null;
-  if (filterInput) {
-    filterInput.value = '';
-    filterInput.focus();
-  }
-  this.renderModelPickerList();
-};
-
-(SidePanelUI.prototype as any).hideModelPicker = function hideModelPicker() {
-  const dropdown = document.getElementById('modelPickerDropdown');
-  if (dropdown) dropdown.classList.add('hidden');
-};
-
-const escapeModelHtml = (text: string) =>
-  text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-(SidePanelUI.prototype as any).updateModelSelectorGlow = function updateModelSelectorGlow() {
+sidePanelProto.updateModelSelectorGlow = function updateModelSelectorGlow() {
   const wrap = this.elements.modelSelectorWrap || document.getElementById('modelSelectorWrap');
   if (!wrap) return;
-  const activeConfig = this.configs?.[this.currentConfig];
-  const provider = String(activeConfig?.provider || '').trim().toLowerCase();
+  const activeConfig = materializeProfileWithProvider(
+    { providers: this.providers, configs: this.configs },
+    this.currentConfig,
+    this.configs?.[this.currentConfig] || {},
+  );
+  const provider = String(activeConfig?.provider || '')
+    .trim()
+    .toLowerCase();
   const isParchi = provider === 'parchi' || provider === 'openrouter';
   wrap.classList.toggle('parchi-glow', isParchi);
 };
 
-(SidePanelUI.prototype as any).shortenModelName = function shortenModelName(model: string): string {
+sidePanelProto.shortenModelName = function shortenModelName(model: string): string {
   if (!model) return 'unknown';
   // Remove common prefixes
   const clean = model
@@ -515,31 +682,30 @@ const escapeModelHtml = (text: string) =>
   return clean.slice(0, 19) + '…';
 };
 
-(SidePanelUI.prototype as any).handleModelSelectChange = async function handleModelSelectChange() {
+sidePanelProto.handleModelSelectChange = async function handleModelSelectChange() {
   const select = this.elements.modelSelect;
   if (!select) return;
 
-  const selectedProfile = select.value;
-  if (!selectedProfile || !this.configs[selectedProfile]) return;
-  if (selectedProfile === this.currentConfig) return;
+  const selected = decodeModelSelectValue(select.value);
+  if (!selected) return;
+  const activeConfig = materializeProfileWithProvider(
+    { providers: this.providers, configs: this.configs },
+    this.currentConfig,
+    this.configs?.[this.currentConfig] || {},
+  );
+  const activeProviderId = String(activeConfig?.providerId || '').trim();
+  const activeModelId = String(activeConfig?.modelId || activeConfig?.model || '').trim();
+  if (selected.providerId === activeProviderId && selected.modelId === activeModelId) return;
 
-  // Switch to the selected profile
   try {
-    // setActiveConfig updates in-memory UI state; persistAllSettings ensures the background
-    // script (which reads from chrome.storage) uses the same active profile.
-    this.setActiveConfig(selectedProfile, true);
-    await this.persistAllSettings({ silent: true });
-    const selected = this.configs[selectedProfile] || {};
-    const providerLabel = selected.provider || 'unconfigured';
-    const modelLabel = selected.model || 'no-model';
-    this.updateStatus(`Switched to ${providerLabel}/${modelLabel}`, 'success');
+    this.selectModelFromGrid?.(selected.providerId, selected.modelId);
   } catch (error) {
-    console.error('[Parchi] Failed to persist selected profile:', error);
-    this.updateStatus('Failed to switch profile', 'error');
+    console.error('[Parchi] Failed to apply selected model:', error);
+    this.updateStatus('Failed to switch model', 'error');
   }
 };
 
-(SidePanelUI.prototype as any).toggleBalancePopover = async function toggleBalancePopover() {
+sidePanelProto.toggleBalancePopover = async function toggleBalancePopover() {
   const popover = document.getElementById('balancePopover');
   if (!popover) return;
 
@@ -579,8 +745,14 @@ const escapeModelHtml = (text: string) =>
     if (planEl) planEl.textContent = planLabel;
 
     // Get active profile info for provider context
-    const activeConfig = this.configs?.[this.currentConfig];
-    const provider = String(activeConfig?.provider || '').trim().toLowerCase();
+    const activeConfig = materializeProfileWithProvider(
+      { providers: this.providers, configs: this.configs },
+      this.currentConfig,
+      this.configs?.[this.currentConfig] || {},
+    );
+    const provider = String(activeConfig?.provider || '')
+      .trim()
+      .toLowerCase();
     if (spendEl) {
       if (provider === 'parchi' || provider === 'openrouter') {
         spendEl.textContent = 'See Account tab';
@@ -591,16 +763,4 @@ const escapeModelHtml = (text: string) =>
   } catch {
     // Ignore storage read failures
   }
-};
-
-(SidePanelUI.prototype as any).getProviderIcon = function getProviderIcon(provider: string): string {
-  const icons: Record<string, string> = {
-    anthropic: '🅒',
-    openai: '🅞',
-    kimi: '🅚',
-    openrouter: '🅡',
-    parchi: '🅟',
-    custom: '⚙️',
-  };
-  return icons[provider] || '⚙️';
 };

@@ -1,10 +1,13 @@
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
+import type { ToolDefinition } from '@parchi/shared';
 import { generateText, jsonSchema, tool } from 'ai';
-import type { ToolDefinition } from '../../shared/src/tools.js';
+import { normalizeOAuthModelIdForProvider } from '../oauth/model-normalization.js';
+import { CODEX_OAUTH_BASE_URL, buildCodexOAuthProviderOptions, isCodexOAuthProvider } from './codex-oauth.js';
 
 export type { ToolDefinition };
+export { CODEX_OAUTH_BASE_URL, buildCodexOAuthProviderOptions, isCodexOAuthProvider } from './codex-oauth.js';
 
 export type SDKModelSettings = {
   provider: string;
@@ -16,11 +19,11 @@ export type SDKModelSettings = {
   proxyBaseUrl?: string;
   proxyAuthToken?: string;
   proxyProvider?: 'openai' | 'anthropic' | 'kimi' | 'openrouter';
+  oauthAccessToken?: string;
+  oauthApiBaseUrl?: string;
+  oauthApiHeaders?: Record<string, string>;
 };
 
-/**
- * Auto-prefix bare model names for OpenRouter (requires `provider/model` format).
- */
 export function normalizeOpenRouterModelId(modelId: string): string {
   let model = modelId.trim();
   if (/^(parchi|openrouter)\//i.test(model)) {
@@ -41,6 +44,11 @@ export function normalizeOpenRouterModelId(modelId: string): string {
   return model;
 }
 
+const toAnthropicBaseUrl = (value: string) => {
+  const base = value.replace(/\/v1\/messages\/?$/i, '').replace(/\/messages\/?$/i, '').replace(/\/+$/, '');
+  return /\/v1$/i.test(base) ? base : `${base}/v1`;
+};
+
 export function resolveLanguageModel(settings: SDKModelSettings) {
   const provider = settings.provider || 'openai';
   const modelId = String(settings.model || '').trim();
@@ -56,7 +64,7 @@ export function resolveLanguageModel(settings: SDKModelSettings) {
     const normalizedBase = settings.proxyBaseUrl.replace(/\/+$/, '');
     const proxyProvider =
       settings.proxyProvider ||
-      (provider === 'anthropic' || provider === 'kimi'
+      (provider === 'anthropic' || provider === 'kimi' || provider === 'glm' || provider === 'minimax'
         ? 'anthropic'
         : provider === 'openrouter' || provider === 'parchi'
           ? 'openrouter'
@@ -116,25 +124,14 @@ export function resolveLanguageModel(settings: SDKModelSettings) {
     return providerInstance(modelId);
   }
 
-  if (provider === 'kimi') {
-    // Kimi is Anthropic-compatible (x-api-key + /v1/messages)
-    // Also requires User-Agent header (enforced via declarativeNetRequest in background.ts)
-    let baseURL = (settings.customEndpoint || 'https://api.kimi.com/coding')
-      .replace(/\/v1\/messages\/?$/i, '')
-      .replace(/\/messages\/?$/i, '')
-      .replace(/\/+$/, '');
-
-    // createAnthropic expects base ending in /v1 — it appends /messages
-    if (!/\/v1$/i.test(baseURL)) {
-      baseURL = `${baseURL}/v1`;
-    }
-
-    const kimiProvider = createAnthropic({
-      apiKey,
-      baseURL,
-      headers: extraHeaders,
-    });
-    return kimiProvider(modelId);
+  if (provider === 'glm' || provider === 'minimax' || provider === 'kimi') {
+    const fallbackBase =
+      provider === 'glm'
+        ? 'https://api.z.ai/api/anthropic'
+        : provider === 'minimax'
+          ? 'https://api.minimax.io/anthropic'
+          : 'https://api.kimi.com/coding';
+    return createAnthropic({ apiKey, baseURL: toAnthropicBaseUrl(settings.customEndpoint || fallbackBase), headers: extraHeaders })(modelId);
   }
 
   if (provider === 'openrouter' || provider === 'parchi') {
@@ -149,6 +146,58 @@ export function resolveLanguageModel(settings: SDKModelSettings) {
       },
     });
     return openRouterProvider(normalizeOpenRouterModelId(modelId));
+  }
+
+  if (provider.endsWith('-oauth') && !settings.oauthAccessToken) {
+    const baseProvider = provider.replace(/-oauth$/, '');
+    throw new Error(`OAuth session expired for ${baseProvider}. Please reconnect in Settings > OAuth.`);
+  }
+
+  if (provider.endsWith('-oauth') && settings.oauthAccessToken) {
+    const baseProvider = provider.replace(/-oauth$/, '');
+    const oauthModelId = normalizeOAuthModelIdForProvider(baseProvider, modelId);
+    if (!oauthModelId) {
+      throw new Error('No model configured. Open Settings and choose a model before running.');
+    }
+
+    if (baseProvider === 'claude') {
+      const anthropicOAuth = createAnthropic({
+        apiKey: settings.oauthAccessToken,
+        baseURL: settings.oauthApiBaseUrl || 'https://api.anthropic.com/v1',
+        headers: { ...extraHeaders, ...settings.oauthApiHeaders },
+      });
+      return anthropicOAuth(oauthModelId);
+    }
+
+    if (baseProvider === 'copilot') {
+      const copilotProvider = createOpenAICompatible({
+        name: 'github-copilot',
+        apiKey: settings.oauthAccessToken,
+        baseURL: settings.oauthApiBaseUrl || 'https://api.githubcopilot.com',
+        headers: {
+          ...extraHeaders,
+          ...(settings.oauthApiHeaders || {}),
+        },
+      });
+      return copilotProvider(oauthModelId);
+    }
+
+    if (baseProvider === 'codex') {
+      const codexOAuth = createOpenAI({
+        apiKey: settings.oauthAccessToken,
+        baseURL: settings.oauthApiBaseUrl || CODEX_OAUTH_BASE_URL,
+        headers: { ...extraHeaders, ...settings.oauthApiHeaders },
+      });
+      return codexOAuth(oauthModelId);
+    }
+
+    const oauthProvider = createOpenAICompatible({
+      name: `${baseProvider}-oauth`,
+      apiKey: settings.oauthAccessToken,
+      baseURL: settings.oauthApiBaseUrl || 'https://api.openai.com/v1',
+      headers: { ...extraHeaders, ...settings.oauthApiHeaders },
+    });
+    return oauthProvider(oauthModelId);
   }
 
   if (provider === 'custom') {
@@ -219,9 +268,10 @@ export async function describeImageWithModel({
   maxTokens?: number;
 }) {
   const model = resolveLanguageModel(settings);
-  const result = await generateText({
+  const codexOAuth = isCodexOAuthProvider(settings.provider);
+  const request: Parameters<typeof generateText>[0] = {
     model,
-    maxOutputTokens: maxTokens,
+    providerOptions: codexOAuth ? buildCodexOAuthProviderOptions('You are a concise vision assistant.') : undefined,
     messages: [
       {
         role: 'user',
@@ -231,6 +281,10 @@ export async function describeImageWithModel({
         ],
       },
     ],
-  });
+  };
+  if (!codexOAuth) {
+    request.maxOutputTokens = maxTokens;
+  }
+  const result = await generateText(request);
   return result.text;
 }

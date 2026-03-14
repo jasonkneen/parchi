@@ -5,16 +5,16 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: color-mix(in oklab, var(--bg-primary) 74%, transparent);
+  background: color-mix(in oklab, var(--background) 74%, transparent);
   backdrop-filter: blur(5px);
   border-radius: 16px;
 }
 
 .account-onboarding-card {
   width: min(420px, 96%);
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--ink-2);
   border-radius: 14px;
-  background: var(--bg-secondary);
+  background: var(--card);
   box-shadow: 0 14px 40px rgba(0, 0, 0, 0.2);
   padding: 18px;
 }
@@ -22,13 +22,13 @@
 .account-onboarding-title {
   font-size: 16px;
   font-weight: 700;
-  color: var(--text-primary);
+  color: var(--foreground);
 }
 
 .account-onboarding-subtitle {
   margin-top: 8px;
   font-size: 13px;
-  color: var(--text-secondary);
+  color: var(--muted);
   line-height: 1.45;
 }
 
@@ -55,8 +55,54 @@
 }
 
 .account-inline-note {
-  font-size: 12px;
-  color: var(--text-secondary);
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.account-panel-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.account-overview-card {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--ink-1);
+  border-radius: 12px;
+  padding: 14px;
+  background: linear-gradient(135deg, rgb(var(--accent-rgb) / 0.08), transparent 55%), var(--card);
+}
+
+.account-overview-eyebrow {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent-light);
+}
+
+.account-overview-title {
+  margin-top: 4px;
+  font-size: 14px;
+  line-height: 1.4;
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+.account-auth-block-panel {
+  border: 1px solid var(--ink-1);
+  border-radius: 12px;
+  background: var(--card);
+  padding: 14px;
+}
+
+.account-auth-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
 }
 
 .account-stats-grid {
@@ -72,10 +118,10 @@
 }
 
 .account-chart-card {
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--ink-1);
   border-radius: 10px;
   padding: 8px 10px;
-  background: var(--bg-tertiary);
+  background: var(--card);
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -87,14 +133,14 @@
   justify-content: space-between;
   gap: 10px;
   font-size: 11px;
-  color: var(--text-primary);
+  color: var(--foreground);
   font-weight: 600;
 }
 
 .account-chart-meta {
   font-size: 10px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  color: var(--text-secondary);
+  color: var(--muted);
 }
 
 .account-credit-flow-bar {
@@ -102,7 +148,7 @@
   width: 100%;
   height: 8px;
   border-radius: 999px;
-  background: color-mix(in oklab, var(--border-color) 65%, transparent);
+  background: color-mix(in oklab, var(--ink-1) 65%, transparent);
   overflow: hidden;
 }
 
@@ -125,7 +171,7 @@
   gap: 10px;
   align-items: center;
   font-size: 10px;
-  color: var(--text-secondary);
+  color: var(--muted);
 }
 
 .account-legend-item {
@@ -175,7 +221,7 @@
 
 .account-spend-bar-label {
   font-size: 9px;
-  color: var(--text-tertiary);
+  color: var(--muted-dim);
   text-transform: uppercase;
 }
 
@@ -185,7 +231,7 @@
   gap: 8px;
   align-items: center;
   font-size: 10px;
-  color: var(--text-secondary);
+  color: var(--muted);
 }
 
 .account-density-track {
@@ -193,7 +239,7 @@
   height: 7px;
   border-radius: 999px;
   overflow: hidden;
-  background: color-mix(in oklab, var(--border-color) 65%, transparent);
+  background: color-mix(in oklab, var(--ink-1) 65%, transparent);
 }
 
 .account-density-fill {
@@ -204,10 +250,10 @@
 }
 
 .account-stat {
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--ink-1);
   border-radius: 10px;
   padding: 8px 10px;
-  background: var(--bg-tertiary);
+  background: var(--card);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -218,20 +264,20 @@
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: var(--text-tertiary);
+  color: var(--muted-dim);
 }
 
 .account-stat-value {
   font-size: 12px;
-  color: var(--text-primary);
+  color: var(--foreground);
   font-weight: 600;
   text-align: right;
 }
 
 .account-ledger {
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--ink-1);
   border-radius: 10px;
-  background: var(--bg-tertiary);
+  background: var(--card);
   padding: 8px;
 }
 
@@ -242,13 +288,13 @@
   gap: 8px;
   margin-bottom: 8px;
   font-size: 12px;
-  color: var(--text-primary);
+  color: var(--foreground);
   font-weight: 600;
 }
 
 .account-ledger-subtitle {
   font-size: 10px;
-  color: var(--text-tertiary);
+  color: var(--muted-dim);
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -267,15 +313,15 @@
   grid-template-columns: auto 1fr auto;
   gap: 8px;
   align-items: center;
-  border: 1px solid color-mix(in oklab, var(--border-color) 75%, transparent);
+  border: 1px solid color-mix(in oklab, var(--ink-1) 75%, transparent);
   border-radius: 8px;
   padding: 6px 8px;
-  background: color-mix(in oklab, var(--bg-primary) 20%, var(--bg-tertiary));
+  background: color-mix(in oklab, var(--background) 20%, var(--card));
 }
 
 .account-ledger-time {
   font-size: 10px;
-  color: var(--text-tertiary);
+  color: var(--muted-dim);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
 
@@ -288,7 +334,7 @@
 
 .account-ledger-type {
   font-size: 11px;
-  color: var(--text-primary);
+  color: var(--foreground);
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
@@ -297,7 +343,7 @@
 
 .account-ledger-meta {
   font-size: 10px;
-  color: var(--text-secondary);
+  color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -319,12 +365,20 @@
 
 .account-ledger-empty {
   font-size: 11px;
-  color: var(--text-secondary);
+  color: var(--muted);
   padding: 8px 4px;
 }
 
 @media (max-width: 540px) {
   .account-onboarding-actions {
+    flex-direction: column;
+  }
+
+  .account-auth-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .account-overview-card {
     flex-direction: column;
   }
 }
@@ -484,4 +538,344 @@
 .usage-cost-cell {
   color: var(--foreground);
   font-weight: 600;
+}
+
+.usage-model-bar {
+  height: 2px;
+  margin-top: 4px;
+  border-radius: 1px;
+  background: rgb(var(--accent-rgb) / 0.25);
+  transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.usage-header-actions {
+  display: flex;
+  gap: 6px;
+}
+
+/* ============================================================================
+   OAuth Provider Cards - unified with profile cards
+   ============================================================================ */
+
+.oauth-provider-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.oauth-provider-card {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  background: var(--card);
+  border: 1px solid var(--ink-1);
+  border-radius: var(--radius-sm);
+  transition: all 150ms ease;
+}
+
+.oauth-provider-card:hover {
+  background: var(--card-hover);
+  border-color: var(--ink-2);
+}
+
+.oauth-provider-card.connected {
+  border-color: rgb(var(--accent-rgb) / 0.32);
+  box-shadow: inset 0 0 0 1px rgb(var(--accent-rgb) / 0.08);
+}
+
+.oauth-provider-card-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.oauth-provider-card-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+.oauth-provider-card-status {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.oauth-provider-card.connected .oauth-provider-card-status {
+  color: var(--accent);
+}
+
+.oauth-provider-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.oauth-provider-card .btn {
+  padding: 5px 11px;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: 9999px;
+}
+
+.oauth-provider-card .btn-disconnect {
+  background: transparent;
+  border-color: var(--ink-2);
+  color: var(--muted);
+}
+
+.oauth-provider-card .btn-disconnect:hover {
+  border-color: rgba(248, 113, 113, 0.4);
+  color: var(--error);
+  background: rgba(248, 113, 113, 0.05);
+}
+
+/* Device code prompt */
+
+.oauth-device-prompt {
+  margin-top: 4px;
+}
+
+.oauth-device-prompt-inner {
+  padding: 14px;
+  background: var(--card);
+  border: 1px solid var(--ink-2);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: center;
+  text-align: center;
+}
+
+.oauth-device-prompt-title {
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--foreground);
+}
+
+.oauth-device-code-value {
+  font-size: 24px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  letter-spacing: 0.12em;
+  color: var(--accent-light);
+  padding: 8px 16px;
+  background: rgb(var(--accent-rgb) / 0.06);
+  border: 1px solid rgb(var(--accent-rgb) / 0.15);
+  border-radius: 10px;
+  user-select: all;
+}
+
+.oauth-device-prompt-hint {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.oauth-device-prompt-hint a {
+  color: var(--accent-light);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.oauth-device-prompt-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.oauth-device-prompt-actions .btn {
+  padding: 5px 12px;
+  font-size: 11px;
+}
+
+/* OAuth provider card enhancements */
+
+.oauth-provider-card-email {
+  font-size: 12px;
+  color: var(--accent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.oauth-provider-card-status.oauth-error {
+  color: var(--error, #ef5350);
+}
+
+.oauth-provider-model-row {
+  margin-top: 6px;
+}
+
+.oauth-model-select {
+  width: 100%;
+  max-width: 200px;
+  padding: 5px 10px;
+  font-size: 11px;
+  border: 1px solid var(--ink-1);
+  border-radius: 6px;
+  background: var(--background);
+  color: var(--foreground);
+  cursor: pointer;
+}
+
+.oauth-model-select:focus {
+  outline: none;
+  border-color: rgb(var(--accent-rgb) / 0.5);
+}
+
+/* OAuth badge - subtle lock icon style */
+
+.oauth-badge {
+  font-size: 11px;
+  opacity: 0.5;
+  vertical-align: middle;
+  margin-left: 4px;
+}
+
+.oauth-badge::before {
+  content: "🔒";
+}
+
+/* OAuth profile card styling */
+
+.agent-card.oauth-profile {
+  border-color: rgb(var(--accent-rgb) / 0.12);
+}
+
+.agent-card.oauth-profile .agent-card-title {
+  color: var(--accent-light);
+}
+
+/* Read-only input for OAuth profiles */
+
+.oauth-readonly {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Provider card grid (API key providers) - unified with profile cards */
+
+.provider-card-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.provider-card {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  background: var(--card);
+  border: 1px solid var(--ink-1);
+  border-radius: var(--radius-sm);
+  transition: all 150ms ease;
+}
+
+.provider-card:hover {
+  background: var(--card-hover);
+  border-color: var(--ink-2);
+}
+
+.provider-card.connected {
+  border-color: rgb(var(--accent-rgb) / 0.32);
+  box-shadow: inset 0 0 0 1px rgb(var(--accent-rgb) / 0.08);
+}
+
+.provider-card-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
+.provider-card-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.provider-card-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+.provider-card-status {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.provider-card-status.status-connected {
+  color: var(--accent);
+}
+
+.provider-card-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.provider-card-actions .btn {
+  padding: 5px 11px;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: 9999px;
+}
+
+.provider-inline-editor {
+  margin-top: 10px;
+  padding: 12px;
+  background: var(--background);
+  border: 1px solid var(--ink-1);
+  border-radius: var(--radius-sm);
+  width: 100%;
+}
+
+.provider-inline-editor .form-group {
+  margin-bottom: 10px;
+}
+
+/* Profile editor sections */
+
+.profile-editor-section summary {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  padding: 8px 10px;
+  background: var(--card);
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.profile-editor-section summary::before {
+  content: "";
+  width: 0;
+  height: 0;
+  border-left: 3px solid var(--muted-dim);
+  border-top: 2px solid transparent;
+  border-bottom: 2px solid transparent;
+  transition: transform 150ms ease;
+}
+
+.profile-editor-section[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.profile-editor-section .settings-body {
+  padding-top: 12px;
 }

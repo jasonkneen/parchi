@@ -1,17 +1,16 @@
 import { createMessage, normalizeConversationHistory } from '../../../ai/message-schema.js';
 import type { Message } from '../../../ai/message-schema.js';
 import { dedupeThinking, extractThinking } from '../../../ai/message-utils.js';
+import {
+  clearSessionHistoryStore,
+  deleteSessionHistoryEntry,
+  getSessionHistoryEntries,
+  hydrateSessionHistoryStore,
+  upsertSessionHistoryEntry,
+} from '../../../state/stores/session-history-store.js';
+import { clampContextHistory, clearReportImages, clearToolCallViews } from '../core/panel-session-memory.js';
 import { SidePanelUI } from '../core/panel-ui.js';
-
-const normalizeStoredSessions = (raw: any): any[] => {
-  if (Array.isArray(raw)) {
-    return raw.filter(Boolean);
-  }
-  if (raw && typeof raw === 'object') {
-    return Object.values(raw).filter(Boolean);
-  }
-  return [];
-};
+const sidePanelProto = SidePanelUI.prototype as SidePanelUI & Record<string, unknown>;
 
 const normalizeTranscript = (value: any): any[] => {
   if (Array.isArray(value)) return value;
@@ -29,7 +28,7 @@ const normalizeTranscript = (value: any): any[] => {
   return [];
 };
 
-(SidePanelUI.prototype as any).persistHistory = async function persistHistory() {
+sidePanelProto.persistHistory = async function persistHistory() {
   // Default to saving history unless explicitly disabled
   const saveEnabled = this.elements.saveHistory?.value !== 'false';
   if (!saveEnabled) return;
@@ -41,6 +40,10 @@ const normalizeTranscript = (value: any): any[] => {
   const turns = Array.from(this.historyTurnMap.values())
     .filter((turn: any) => turn && typeof turn === 'object')
     .sort((a: any, b: any) => Number(a.startedAt || 0) - Number(b.startedAt || 0));
+  const contextTranscript = normalizeConversationHistory(
+    Array.isArray(this.contextHistory) ? (this.contextHistory.slice(-240) as Message[]) : [],
+    { addIds: false, addTimestamps: false },
+  );
 
   const entry = {
     id: this.sessionId,
@@ -49,17 +52,13 @@ const normalizeTranscript = (value: any): any[] => {
     title: this.firstUserMessage || 'Session',
     messageCount: this.displayHistory.length,
     transcript: this.displayHistory.slice(-200),
+    contextTranscript,
     turns,
   };
 
   try {
-    const existing = await chrome.storage.local.get(['chatSessions']);
-    const sessions = normalizeStoredSessions(existing.chatSessions);
-    const filtered = sessions.filter((s: any) => s?.id !== entry.id);
-    filtered.unshift(entry);
-    const trimmed = filtered.slice(0, 50); // Keep more sessions
-    await chrome.storage.local.set({ chatSessions: trimmed });
-    this.loadHistoryList();
+    await upsertSessionHistoryEntry(entry);
+    void this.loadHistoryList();
   } catch (e) {
     console.error('Failed to persist history:', e);
   }
@@ -88,7 +87,7 @@ const resolveHistoryContainer = (self: any): HTMLElement | null => {
   return null;
 };
 
-(SidePanelUI.prototype as any).loadHistoryList = async function loadHistoryList() {
+sidePanelProto.loadHistoryList = async function loadHistoryList() {
   const container = resolveHistoryContainer(this);
   if (!container) return;
 
@@ -100,8 +99,8 @@ const resolveHistoryContainer = (self: any): HTMLElement | null => {
   }
 
   try {
-    const { chatSessions } = await chrome.storage.local.get(['chatSessions']);
-    const sessions = normalizeStoredSessions(chatSessions);
+    await hydrateSessionHistoryStore();
+    const sessions = getSessionHistoryEntries();
     container.innerHTML = '';
 
     if (!sessions.length) {
@@ -159,7 +158,7 @@ const resolveHistoryContainer = (self: any): HTMLElement | null => {
   }
 };
 
-(SidePanelUI.prototype as any).filterHistoryList = function filterHistoryList(query: string) {
+sidePanelProto.filterHistoryList = function filterHistoryList(query: string) {
   const container = resolveHistoryContainer(this);
   if (!container) return;
   const lowerQuery = query.toLowerCase();
@@ -175,14 +174,16 @@ const resolveHistoryContainer = (self: any): HTMLElement | null => {
   });
 };
 
-(SidePanelUI.prototype as any).loadSession = function loadSession(session: any) {
+sidePanelProto.loadSession = function loadSession(session: any) {
   this.switchView('chat');
   this.recordScrollPosition();
 
   const transcript = normalizeTranscript(session.transcript);
+  const contextTranscriptRaw = normalizeTranscript(session.contextTranscript);
+  const normalizedContextTranscript = normalizeConversationHistory(contextTranscriptRaw as unknown as Message[]);
+  const normalizedTranscript = normalizeConversationHistory(transcript as unknown as Message[]);
   let turns = normalizeTranscript(session.turns);
   if (turns.length > 0 && transcript.length > 0) {
-    const normalizedTranscript = normalizeConversationHistory(transcript as unknown as Message[]);
     const userQueue = normalizedTranscript.filter((msg) => msg.role === 'user');
     const assistantQueue = normalizedTranscript.filter((msg) => msg.role === 'assistant');
     const takeUser = () => userQueue.shift();
@@ -221,10 +222,8 @@ const resolveHistoryContainer = (self: any): HTMLElement | null => {
       this.sessionId = session.id || `session-${suffix}`;
       this.firstUserMessage = session.title || '';
       this.elements.chatMessages.innerHTML = '';
-      this.toolCallViews.clear();
-      this.reportImages.clear();
-      this.reportImageOrder = [];
-      this.selectedReportImageIds.clear();
+      clearToolCallViews(this.toolCallViews);
+      clearReportImages(this.reportImages, this.reportImageOrder, this.selectedReportImageIds);
       this.resetActivityPanel();
 
       turns.forEach((turn: any) => {
@@ -234,7 +233,6 @@ const resolveHistoryContainer = (self: any): HTMLElement | null => {
           const entry = createMessage({ role: 'user', content: userText });
           if (entry) {
             this.displayHistory.push(entry);
-            this.contextHistory.push(entry);
           }
         }
 
@@ -287,6 +285,12 @@ const resolveHistoryContainer = (self: any): HTMLElement | null => {
         }
       });
 
+      if (normalizedContextTranscript.length > 0) {
+        this.contextHistory = normalizedContextTranscript;
+      } else {
+        this.contextHistory = normalizedTranscript;
+      }
+      clampContextHistory(this.contextHistory);
       this.updateContextUsage();
       this.updateChatEmptyState();
       this.scrollToBottom({ force: true });
@@ -297,9 +301,9 @@ const resolveHistoryContainer = (self: any): HTMLElement | null => {
   }
 
   if (transcript.length > 0) {
-    const normalized = normalizeConversationHistory(transcript || []);
-    this.displayHistory = normalized;
-    this.contextHistory = normalized;
+    this.displayHistory = normalizedTranscript;
+    this.contextHistory = normalizedContextTranscript.length > 0 ? normalizedContextTranscript : normalizedTranscript;
+    clampContextHistory(this.contextHistory);
     const suffix = typeof crypto?.randomUUID === 'function' ? crypto.randomUUID() : String(Date.now());
     this.sessionId = session.id || `session-${suffix}`;
     this.firstUserMessage = session.title || '';
@@ -308,27 +312,24 @@ const resolveHistoryContainer = (self: any): HTMLElement | null => {
   }
 };
 
-(SidePanelUI.prototype as any).deleteSession = async function deleteSession(sessionId: string) {
+sidePanelProto.deleteSession = async function deleteSession(sessionId: string) {
   try {
-    const { chatSessions } = await chrome.storage.local.get(['chatSessions']);
-    const sessions = normalizeStoredSessions(chatSessions);
-    const filtered = sessions.filter((s: any) => s?.id !== sessionId);
-    await chrome.storage.local.set({ chatSessions: filtered });
-    this.loadHistoryList();
+    await deleteSessionHistoryEntry(sessionId);
+    void this.loadHistoryList();
   } catch (e) {
     console.error('Failed to delete session:', e);
   }
 };
 
-(SidePanelUI.prototype as any).clearAllHistory = async function clearAllHistory() {
+sidePanelProto.clearAllHistory = async function clearAllHistory() {
   // Use a two-click pattern instead of confirm() which freezes the sidepanel.
   // First click sets a flag; second click within 3s actually clears.
   const now = Date.now();
   if (this._clearHistoryPendingAt && now - this._clearHistoryPendingAt < 3000) {
     this._clearHistoryPendingAt = 0;
     try {
-      await chrome.storage.local.set({ chatSessions: [] });
-      this.loadHistoryList();
+      await clearSessionHistoryStore();
+      void this.loadHistoryList();
       this.updateStatus('History cleared', 'success');
     } catch (e) {
       console.error('Failed to clear history:', e);
@@ -339,7 +340,7 @@ const resolveHistoryContainer = (self: any): HTMLElement | null => {
   this.updateStatus('Click Clear again to confirm', 'warning');
 };
 
-(SidePanelUI.prototype as any).formatTimeAgo = function formatTimeAgo(date: Date): string {
+sidePanelProto.formatTimeAgo = function formatTimeAgo(date: Date): string {
   const now = new Date();
   const diff = now.getTime() - date.getTime();
   const minutes = Math.floor(diff / 60000);
@@ -353,12 +354,10 @@ const resolveHistoryContainer = (self: any): HTMLElement | null => {
   return date.toLocaleDateString();
 };
 
-(SidePanelUI.prototype as any).renderConversationHistory = function renderConversationHistory() {
+sidePanelProto.renderConversationHistory = function renderConversationHistory() {
   this.elements.chatMessages.innerHTML = '';
-  this.toolCallViews.clear();
-  this.reportImages.clear();
-  this.reportImageOrder = [];
-  this.selectedReportImageIds.clear();
+  clearToolCallViews(this.toolCallViews);
+  clearReportImages(this.reportImages, this.reportImageOrder, this.selectedReportImageIds);
   this.lastChatTurn = null;
   this.resetActivityPanel();
 

@@ -1,5 +1,7 @@
 import './ui/panel-modules.js';
 import './ui/account/panel-account.js';
+import { hydrateSessionHistoryStore, startSessionHistoryStoreSync } from '../state/stores/session-history-store.js';
+import { hydrateSettingsStore, startSettingsStoreSync } from '../state/stores/settings-store.js';
 import { loadPanelLayout } from './ui/core/layout-loader.js';
 import { SidePanelUI } from './ui/core/panel-ui.js';
 
@@ -7,12 +9,15 @@ declare const __PERF_DEBUG__: boolean;
 
 const init = async () => {
   await loadPanelLayout();
+  startSettingsStoreSync();
+  startSessionHistoryStoreSync();
+  void hydrateSettingsStore();
+  void hydrateSessionHistoryStore();
   const ui = new SidePanelUI();
-  // Expose for debugging
-  (window as any).sidePanelUI = ui;
+  const debugWindow = window as Window & { sidePanelUI?: SidePanelUI; __PERF_DEBUG__?: boolean };
+  debugWindow.sidePanelUI = ui;
 
-  // Performance monitor — only loaded when PERF_DEBUG=true build or runtime toggle
-  if (__PERF_DEBUG__ || (window as any).__PERF_DEBUG__) {
+  if (__PERF_DEBUG__ || debugWindow.__PERF_DEBUG__) {
     const { perfMonitor } = await import('../utils/perf-monitor.js');
     perfMonitor.start();
   }

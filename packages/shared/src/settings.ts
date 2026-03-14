@@ -16,6 +16,7 @@ export const DEFAULT_TOOL_PERMISSIONS: ToolPermissions = {
 
 // Superset of keys used across background + sidepanel.
 export const PARCHI_STORAGE_KEYS = [
+  'providers',
   'provider',
   'apiKey',
   'model',
@@ -34,6 +35,7 @@ export const PARCHI_STORAGE_KEYS = [
   'autoScroll',
   'confirmActions',
   'saveHistory',
+  'autoSaveSession',
   'toolPermissions',
   'allowedDomains',
   'activeConfig',

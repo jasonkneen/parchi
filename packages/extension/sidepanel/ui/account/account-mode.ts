@@ -2,12 +2,29 @@ export const ACCOUNT_MODE_KEY = 'accountModeChoice';
 export const ACCOUNT_MODE_BYOK = 'byok';
 export const ACCOUNT_MODE_PAID = 'paid';
 
-const hasByokCredentialsInProfile = (profile: any) => {
-  const apiKey = String(profile?.apiKey || '').trim();
-  return apiKey.length > 0;
+type ProfileLike = { apiKey?: unknown; provider?: unknown; model?: unknown; customEndpoint?: unknown };
+
+type StoredLike = {
+  configs?: Record<string, ProfileLike>;
+  activeConfig?: string;
+  provider?: unknown;
+  apiKey?: unknown;
+  model?: unknown;
+  customEndpoint?: unknown;
 };
 
-export const hasConfiguredByokProvider = (stored: Record<string, any>) => {
+const hasByokCredentialsInProfile = (profile: ProfileLike | null | undefined) => {
+  const apiKey = String(profile?.apiKey || '').trim();
+  if (apiKey.length > 0) return true;
+
+  const provider = String(profile?.provider || '')
+    .trim()
+    .toLowerCase();
+  const model = String(profile?.model || '').trim();
+  return provider.endsWith('-oauth') && model.length > 0;
+};
+
+export const hasConfiguredByokProvider = (stored: StoredLike) => {
   const configs = stored?.configs && typeof stored.configs === 'object' ? stored.configs : {};
   const activeConfigName = String(stored?.activeConfig || 'default');
   const activeProfile =

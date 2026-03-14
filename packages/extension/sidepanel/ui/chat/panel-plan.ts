@@ -1,10 +1,11 @@
-import type { RunPlan } from '../../../../shared/src/plan.js';
+import type { RunPlan } from '@parchi/shared';
 import { SidePanelUI } from '../core/panel-ui.js';
+const sidePanelProto = SidePanelUI.prototype as SidePanelUI & Record<string, unknown>;
 
 /**
  * Initialize plan drawer event listeners
  */
-(SidePanelUI.prototype as any).setupPlanDrawer = function setupPlanDrawer() {
+sidePanelProto.setupPlanDrawer = function setupPlanDrawer() {
   this.elements.planDrawerToggle?.addEventListener('click', (e: MouseEvent) => {
     // Don't toggle if clicking on action buttons
     if ((e.target as HTMLElement).closest('.plan-drawer-actions')) return;
@@ -20,29 +21,31 @@ import { SidePanelUI } from '../core/panel-ui.js';
 /**
  * Toggle the plan drawer collapsed state
  */
-(SidePanelUI.prototype as any).togglePlanDrawer = function togglePlanDrawer() {
+sidePanelProto.togglePlanDrawer = function togglePlanDrawer() {
   this.elements.planDrawer?.classList.toggle('collapsed');
+  if (this.elements.planDrawer) {
+    this.elements.planDrawer.dataset.autoCollapsed = 'false';
+  }
 };
 
 /**
  * Show the plan drawer
  */
-(SidePanelUI.prototype as any).showPlanDrawer = function showPlanDrawer() {
+sidePanelProto.showPlanDrawer = function showPlanDrawer() {
   this.elements.planDrawer?.classList.remove('hidden');
-  this.elements.planDrawer?.classList.remove('collapsed');
 };
 
 /**
  * Hide the plan drawer
  */
-(SidePanelUI.prototype as any).hidePlanDrawer = function hidePlanDrawer() {
+sidePanelProto.hidePlanDrawer = function hidePlanDrawer() {
   this.elements.planDrawer?.classList.add('hidden');
 };
 
 /**
  * Clear the current plan
  */
-(SidePanelUI.prototype as any).clearPlan = function clearPlan() {
+sidePanelProto.clearPlan = function clearPlan() {
   this.currentPlan = null;
   this.hidePlanDrawer();
   if (this.elements.planChecklist) {
@@ -53,7 +56,7 @@ import { SidePanelUI } from '../core/panel-ui.js';
 /**
  * Render the plan to the drawer
  */
-(SidePanelUI.prototype as any).renderPlanDrawer = function renderPlanDrawer(plan: RunPlan) {
+sidePanelProto.renderPlanDrawer = function renderPlanDrawer(plan: RunPlan) {
   if (!plan || !plan.steps || plan.steps.length === 0) {
     this.hidePlanDrawer();
     return;
@@ -62,6 +65,7 @@ import { SidePanelUI } from '../core/panel-ui.js';
   const steps = plan.steps;
   const completedCount = steps.filter((s) => s.status === 'done').length;
   const totalCount = steps.length;
+  const isComplete = totalCount > 0 && completedCount === totalCount;
 
   // Update step count
   if (this.elements.planStepCount) {
@@ -123,12 +127,21 @@ import { SidePanelUI } from '../core/panel-ui.js';
   }
 
   this.showPlanDrawer();
+  if (this.elements.planDrawer) {
+    if (isComplete) {
+      this.elements.planDrawer.classList.add('collapsed');
+      this.elements.planDrawer.dataset.autoCollapsed = 'true';
+    } else if (this.elements.planDrawer.dataset.autoCollapsed === 'true') {
+      this.elements.planDrawer.classList.remove('collapsed');
+      this.elements.planDrawer.dataset.autoCollapsed = 'false';
+    }
+  }
 };
 
 /**
  * Toggle a plan step's completion status
  */
-(SidePanelUI.prototype as any).togglePlanStep = function togglePlanStep(index: number) {
+sidePanelProto.togglePlanStep = function togglePlanStep(index: number) {
   if (!this.currentPlan || !this.currentPlan.steps[index]) return;
 
   const step = this.currentPlan.steps[index];

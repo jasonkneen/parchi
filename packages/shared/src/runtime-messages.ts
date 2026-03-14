@@ -1,219 +1,38 @@
-import type { RunPlan } from './plan.js';
-
-export const RUNTIME_MESSAGE_SCHEMA_VERSION = 2 as const;
-
-export type RuntimeMessageBase = {
-  schemaVersion: typeof RUNTIME_MESSAGE_SCHEMA_VERSION;
-  runId: string;
-  sessionId: string;
-  turnId?: string;
-  timestamp: number;
-};
-
-export const runStatusPhases = ['planning', 'executing', 'finalizing', 'completed', 'stopped', 'failed'] as const;
-
-export type RunPhase = (typeof runStatusPhases)[number];
-
-export type RetryCounts = {
-  api: number;
-  tool: number;
-  finalize: number;
-};
-
-export type UserRunStart = RuntimeMessageBase & {
-  type: 'user_run_start';
-  message: string;
-};
-
-export type AssistantStreamStart = RuntimeMessageBase & {
-  type: 'assistant_stream_start';
-};
-
-export type AssistantStreamDelta = RuntimeMessageBase & {
-  type: 'assistant_stream_delta';
-  content: string;
-  channel?: 'text' | 'reasoning';
-};
-
-export type AssistantStreamStop = RuntimeMessageBase & {
-  type: 'assistant_stream_stop';
-};
-
-export type ToolExecutionStart = RuntimeMessageBase & {
-  type: 'tool_execution_start';
-  tool: string;
-  id?: string;
-  args: Record<string, unknown>;
-  stepIndex?: number;
-  stepTitle?: string;
-};
-
-export type ToolExecutionResult = RuntimeMessageBase & {
-  type: 'tool_execution_result';
-  tool: string;
-  id?: string;
-  args?: Record<string, unknown>;
-  result: unknown;
-  stepIndex?: number;
-  stepTitle?: string;
-};
-
-export type PlanUpdate = RuntimeMessageBase & {
-  type: 'plan_update';
-  plan: RunPlan;
-};
-
-export type ManualPlanUpdate = RuntimeMessageBase & {
-  type: 'manual_plan_update';
-  steps: Array<{
-    title: string;
-    status?: 'pending' | 'running' | 'done' | 'blocked';
-    notes?: string;
-  }>;
-};
-
-export type RunStatus = RuntimeMessageBase & {
-  type: 'run_status';
-  phase: RunPhase;
-  attempts: RetryCounts;
-  maxRetries: RetryCounts;
-  lastError?: string;
-  note?: string;
-};
-
-export type AssistantResponse = RuntimeMessageBase & {
-  type: 'assistant_response';
-  content: string;
-  thinking?: string | null;
-  model?: string;
-};
-
-export type AssistantFinal = RuntimeMessageBase & {
-  type: 'assistant_final';
-  content: string;
-  thinking?: string | null;
-  model?: string;
-  usage?: {
-    inputTokens?: number;
-    outputTokens?: number;
-    totalTokens?: number;
-  };
-  contextUsage?: {
-    approxTokens?: number;
-    contextLimit?: number;
-    percent?: number;
-  };
-  responseMessages?: Array<Record<string, unknown>>;
-};
-
-export type RunError = RuntimeMessageBase & {
-  type: 'run_error';
-  message: string;
-  errorCategory?: string;
-  action?: string;
-  recoverable?: boolean;
-};
-
-export type RunWarning = RuntimeMessageBase & {
-  type: 'run_warning';
-  message: string;
-};
-
-export type ContextCompacted = RuntimeMessageBase & {
-  type: 'context_compacted';
-  summary: string;
-  trimmedCount: number;
-  preservedCount: number;
-  newSessionId: string;
-  contextMessages: Array<Record<string, unknown>>;
-  contextUsage?: {
-    approxTokens?: number;
-    contextLimit?: number;
-    percent?: number;
-  };
-};
-
-export type SubagentStart = RuntimeMessageBase & {
-  type: 'subagent_start';
-  id: string;
-  name: string;
-  tasks?: string[];
-  parentRunId?: string;
-};
-
-export type SessionTabsUpdate = RuntimeMessageBase & {
-  type: 'session_tabs_update';
-  tabs: Array<{
-    id: number;
-    title?: string;
-    url?: string;
-  }>;
-  activeTabId: number | null;
-  maxTabs: number;
-  groupTitle?: string;
-};
-
-export type ReportImageSummary = {
-  id: string;
-  capturedAt: number;
-  url?: string;
-  title?: string;
-  tabId?: number;
-  visionDescription?: string;
-  selected: boolean;
-};
-
-export type ReportImageCaptured = RuntimeMessageBase & {
-  type: 'report_image_captured';
-  image: {
-    id: string;
-    dataUrl: string;
-    capturedAt: number;
-    toolCallId?: string;
-    tabId?: number;
-    url?: string;
-    title?: string;
-    visionDescription?: string;
-    selected: boolean;
-  };
-  images: ReportImageSummary[];
-  selectedImageIds: string[];
-};
-
-export type ReportImagesSelection = RuntimeMessageBase & {
-  type: 'report_images_selection';
-  images: ReportImageSummary[];
-  selectedImageIds: string[];
-};
-
-export type SubagentComplete = RuntimeMessageBase & {
-  type: 'subagent_complete';
-  id: string;
-  success: boolean;
-  summary?: string;
-  parentRunId?: string;
-};
-
-export type RuntimeMessage =
-  | UserRunStart
-  | AssistantStreamStart
-  | AssistantStreamDelta
-  | AssistantStreamStop
-  | ToolExecutionStart
-  | ToolExecutionResult
-  | PlanUpdate
-  | ManualPlanUpdate
-  | RunStatus
-  | AssistantResponse
-  | AssistantFinal
-  | RunError
-  | RunWarning
-  | ContextCompacted
-  | SubagentStart
-  | ReportImageCaptured
-  | ReportImagesSelection
-  | SubagentComplete
-  | SessionTabsUpdate;
+export {
+  RUNTIME_MESSAGE_SCHEMA_VERSION,
+  runStatusPhases,
+  type AssistantFinal,
+  type AssistantResponse,
+  type AssistantStreamDelta,
+  type AssistantStreamStart,
+  type AssistantStreamStop,
+  type CompactionEvent,
+  type ContextCompacted,
+  type ReportImageCaptured,
+  type ReportImagesSelection,
+  type ReportImageSummary,
+  type RetryCounts,
+  type RunError,
+  type RunPhase,
+  type RunStatus,
+  type RunWarning,
+  type RuntimeBenchmarkContext,
+  type RuntimeLatencyMetrics,
+  type RuntimeMessage,
+  type RuntimeMessageBase,
+  type SessionTabsUpdate,
+  type SubagentComplete,
+  type SubagentTabAssigned,
+  type SubagentStart,
+  type TokenTraceEvent,
+  type TokenTraceSnapshot,
+  type ToolExecutionResult,
+  type ToolExecutionStart,
+  type UserRunStart,
+  type ManualPlanUpdate,
+  type PlanUpdate,
+} from './runtime-message-definitions.js';
+import { RUNTIME_MESSAGE_SCHEMA_VERSION, type RuntimeMessage } from './runtime-message-definitions.js';
 
 export const runtimeMessageTypes = [
   'user_run_start',
@@ -229,11 +48,14 @@ export const runtimeMessageTypes = [
   'assistant_final',
   'run_error',
   'run_warning',
+  'token_trace',
+  'compaction_event',
   'context_compacted',
   'subagent_start',
   'report_image_captured',
   'report_images_selection',
   'subagent_complete',
+  'subagent_tab_assigned',
   'session_tabs_update',
 ] as const;
 

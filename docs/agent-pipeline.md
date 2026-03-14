@@ -1,55 +1,54 @@
-# Agent Pipeline and LSP Guardrails
+# Agent pipeline
 
-## Why this exists
+## Runtime path
 
-Agents are fast but drift when constraints are only tribal knowledge. This repo now keeps constraints in both:
+```mermaid
+flowchart LR
+    U["Sidepanel input"] --> SP["sidepanel UI"]
+    SP --> MR["message-router.ts"]
+    MR --> SVC["service.ts"]
+    SVC --> LOOP["agent-loop.ts"]
+    LOOP --> CAT["tool-catalog.ts"]
+    LOOP --> EXEC["tool-executor.ts"]
+    LOOP --> COMP["compaction-runner.ts"]
+    EXEC --> RT["runtime messages"]
+    COMP --> RT
+    RT --> SP
+```
 
-1. Human-readable instructions (`AGENTS.md` + module-level `AGENTS.md`)
-2. Machine-enforced checks (`npm run check:repo-standards`)
+## Ownership map
 
-## Enforced checks
+| Layer | Files | Job |
+| --- | --- | --- |
+| UI | `sidepanel/panel.ts`, `ui/panel-modules.ts`, `ui/core/panel-ui.ts` | render chat, hold session state, consume runtime events |
+| Message bridge | `background/message-router.ts`, `background/service.ts` | route sidepanel requests into runtime services |
+| Agent loop | `background/agent/agent-loop*.ts` | prepare history, run model pass, normalize responses |
+| Tools | `background/tools/tool-catalog.ts`, `background/tools/tool-executor*.ts`, `packages/extension/tools/` | expose and execute browser tools |
+| Shared contract | `packages/shared/src/runtime-message-*.ts` | define runtime event shapes across UI/background/relay |
 
-`npm run check:repo-standards`
+## State that matters
 
-Current rules (diff-aware):
-- New source files cannot exceed 300 lines.
-- Modified source files cannot cross from <=300 lines to >300 lines.
-- New module directories under `packages/` must include `AGENTS.md`.
+These structures are the first places to inspect for leaks or drift:
 
-CI now runs this check on every PR/push through `.github/workflows/ci.yml`.
+| State | Why it exists | Guardrail |
+| --- | --- | --- |
+| `displayHistory` | UI transcript | capped separately from model context |
+| `contextHistory` | model-facing transcript | clamped through `panel-session-memory.ts` |
+| `historyTurnMap` | rich turn/tool trace | bounded turn and per-turn event caps |
+| `toolCallViews` | tool timeline DOM/view state | capped count + explicit cleanup |
+| `reportImages` | screenshot/report cache | count/byte caps + blob cleanup + fallback eviction |
 
-## LSP reality (important)
+## Where to debug
 
-TypeScript/IDE LSP alone cannot reliably enforce architectural rules like "max 300 LOC" or "module must include AGENTS.md".
+1. **UI looks wrong** → `sidepanel/ui/*`
+2. **Runtime event mismatch** → `runtime-message-definitions.ts`, `message-router.ts`, `panel-core.ts`
+3. **Tool missing/blocked** → `tool-catalog.ts`, `tool-permissions.ts`, `tool-executor.ts`
+4. **Context/compaction issue** → `panel-context.ts`, `panel-session-memory.ts`, `background/agent/compaction-*.ts`
+5. **Perf issue** → run `npm run perf:tabs` and use [`tab-process-performance-playbook.md`](./tab-process-performance-playbook.md)
 
-Use LSP for:
-- Type errors
-- symbol navigation
-- refactor safety
+## Adjacent surfaces
 
-Use repo checks + CI for:
-- file-size limits
-- folder/module policy
-- cross-file architectural contracts
+- Relay: `packages/relay-service/`, `packages/cli/`
+- Electron agent: `packages/electron-agent/`
 
-Current editor baseline lives at `/Users/sero/projects/browser-ai/.vscode/settings.json`:
-- Biome is the default formatter for JS/TS.
-- Code actions are configured for Biome fix/import organization on save.
-
-## Recommended local workflow for agents
-
-1. Read root `/Users/sero/projects/browser-ai/AGENTS.md`.
-2. If touching a feature module, read that module's local `AGENTS.md` first.
-3. Run:
-   - `npm run typecheck`
-   - `npm run check:repo-standards`
-   - `npm run build`
-4. For broad changes, run `npm run check:all`.
-
-## Evolving standards safely
-
-When adding a new rule:
-1. Add it to `scripts/check-repo-standards.mjs`.
-2. Document it in this file.
-3. Keep it diff-aware first (avoid blocking pre-existing debt).
-4. Promote to full-repo enforcement once debt is reduced.
+They reuse the same shared contracts and sit beside the extension runtime, not above it.

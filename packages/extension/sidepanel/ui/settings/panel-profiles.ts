@@ -1,4 +1,7 @@
+import { normalizeOAuthModelIdForProvider } from '../../../oauth/model-normalization.js';
+import { ensureProviderModel, getProviderInstance, materializeProfileWithProvider } from '../../../state/provider-registry.js';
 import { SidePanelUI } from '../core/panel-ui.js';
+const sidePanelProto = SidePanelUI.prototype as SidePanelUI & Record<string, unknown>;
 
 const parseHeadersJson = (raw: string): Record<string, string> => {
   const trimmed = raw.trim();
@@ -26,7 +29,125 @@ const resizeProfilePromptInput = (textarea: HTMLTextAreaElement | null) => {
   textarea.style.overflowY = textarea.scrollHeight > 500 ? 'auto' : 'hidden';
 };
 
-(SidePanelUI.prototype as any).createNewConfig = async function createNewConfig(name?: string) {
+type BooleanBinding = {
+  elementKey: string;
+  configKey: string;
+  defaultTrue: boolean;
+};
+
+type NumberBinding = {
+  elementKey: string;
+  configKey: string;
+  fallback: number;
+  parseMode: 'int' | 'float';
+};
+
+const PROFILE_EDITOR_BOOLEAN_BINDINGS: BooleanBinding[] = [
+  { elementKey: 'profileEditorEnableScreenshots', configKey: 'enableScreenshots', defaultTrue: false },
+  { elementKey: 'profileEditorSendScreenshots', configKey: 'sendScreenshotsAsImages', defaultTrue: false },
+  { elementKey: 'profileEditorShowThinking', configKey: 'showThinking', defaultTrue: true },
+  { elementKey: 'profileEditorStreamResponses', configKey: 'streamResponses', defaultTrue: true },
+  { elementKey: 'profileEditorAutoScroll', configKey: 'autoScroll', defaultTrue: true },
+  { elementKey: 'profileEditorConfirmActions', configKey: 'confirmActions', defaultTrue: true },
+  { elementKey: 'profileEditorSaveHistory', configKey: 'saveHistory', defaultTrue: true },
+];
+
+const PROFILE_EDITOR_NUMBER_BINDINGS: NumberBinding[] = [
+  { elementKey: 'profileEditorTemperature', configKey: 'temperature', fallback: 0.7, parseMode: 'float' },
+  { elementKey: 'profileEditorMaxTokens', configKey: 'maxTokens', fallback: 2048, parseMode: 'int' },
+  { elementKey: 'profileEditorContextLimit', configKey: 'contextLimit', fallback: 200000, parseMode: 'int' },
+  { elementKey: 'profileEditorTimeout', configKey: 'timeout', fallback: 30000, parseMode: 'int' },
+];
+
+const SETTINGS_FORM_BOOLEAN_BINDINGS: BooleanBinding[] = [
+  { elementKey: 'enableScreenshots', configKey: 'enableScreenshots', defaultTrue: false },
+  { elementKey: 'sendScreenshotsAsImages', configKey: 'sendScreenshotsAsImages', defaultTrue: false },
+  { elementKey: 'streamResponses', configKey: 'streamResponses', defaultTrue: true },
+  { elementKey: 'showThinking', configKey: 'showThinking', defaultTrue: true },
+  { elementKey: 'autoScroll', configKey: 'autoScroll', defaultTrue: true },
+  { elementKey: 'confirmActions', configKey: 'confirmActions', defaultTrue: true },
+  { elementKey: 'saveHistory', configKey: 'saveHistory', defaultTrue: true },
+];
+
+const SETTINGS_FORM_NUMBER_BINDINGS: NumberBinding[] = [
+  { elementKey: 'temperature', configKey: 'temperature', fallback: 0.7, parseMode: 'float' },
+  { elementKey: 'maxTokens', configKey: 'maxTokens', fallback: 4096, parseMode: 'int' },
+  { elementKey: 'contextLimit', configKey: 'contextLimit', fallback: 200000, parseMode: 'int' },
+  { elementKey: 'timeout', configKey: 'timeout', fallback: 30000, parseMode: 'int' },
+];
+
+const readControlValue = (elements: Record<string, any>, elementKey: string) => {
+  const control = elements[elementKey];
+  return typeof control?.value === 'string' ? control.value : '';
+};
+
+const setControlValue = (elements: Record<string, any>, elementKey: string, value: string | number) => {
+  const control = elements[elementKey];
+  if (!control || typeof control !== 'object' || !('value' in control)) return;
+  control.value = String(value);
+};
+
+const setCheckboxValue = (elements: Record<string, any>, elementKey: string, value: boolean) => {
+  const control = elements[elementKey] as HTMLInputElement | null;
+  if (!control) return;
+  control.checked = value;
+};
+
+const parseNumeric = (raw: string, fallback: number, parseMode: 'int' | 'float') => {
+  const parsed = parseMode === 'float' ? Number.parseFloat(raw) : Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const toBooleanWithDefault = (value: unknown, defaultTrue: boolean) => (defaultTrue ? value !== false : value === true);
+
+const applyBooleanBindings = (
+  elements: Record<string, any>,
+  config: Record<string, any>,
+  bindings: BooleanBinding[],
+) => {
+  bindings.forEach(({ elementKey, configKey, defaultTrue }) => {
+    setCheckboxValue(elements, elementKey, toBooleanWithDefault(config[configKey], defaultTrue));
+  });
+};
+
+const readBooleanBindings = (elements: Record<string, any>, bindings: BooleanBinding[]) => {
+  const result: Record<string, boolean> = {};
+  bindings.forEach(({ elementKey, configKey, defaultTrue }) => {
+    const control = elements[elementKey] as HTMLInputElement | null;
+    result[configKey] = control ? control.checked : defaultTrue;
+  });
+  return result;
+};
+
+const applyNumberBindings = (elements: Record<string, any>, config: Record<string, any>, bindings: NumberBinding[]) => {
+  bindings.forEach(({ elementKey, configKey, fallback, parseMode }) => {
+    const rawValue = config[configKey];
+    const rawString =
+      typeof rawValue === 'number' ? String(rawValue) : typeof rawValue === 'string' && rawValue.trim() ? rawValue : '';
+    const numeric = parseNumeric(rawString, fallback, parseMode);
+    setControlValue(elements, elementKey, numeric);
+  });
+};
+
+const readNumberBindings = (elements: Record<string, any>, bindings: NumberBinding[]) => {
+  const result: Record<string, number> = {};
+  bindings.forEach(({ elementKey, configKey, fallback, parseMode }) => {
+    result[configKey] = parseNumeric(readControlValue(elements, elementKey), fallback, parseMode);
+  });
+  return result;
+};
+
+const renameProfileReferences = (ui: SidePanelUI, sourceName: string, targetName: string) => {
+  if (ui.currentConfig === sourceName) ui.currentConfig = targetName;
+  ui.profileEditorTarget = targetName;
+  if (ui.elements.visionProfile?.value === sourceName) ui.elements.visionProfile.value = targetName;
+  if (ui.elements.orchestratorProfile?.value === sourceName) ui.elements.orchestratorProfile.value = targetName;
+  ui.auxAgentProfiles = Array.from(
+    new Set(ui.auxAgentProfiles.map((profileName) => (profileName === sourceName ? targetName : profileName))),
+  );
+};
+
+sidePanelProto.createNewConfig = async function createNewConfig(name?: string) {
   // Read from whichever input has a value
   const inputA = this.elements.newProfileInput;
   const inputB = this.elements.newProfileNameInput;
@@ -44,15 +165,18 @@ const resizeProfilePromptInput = (textarea: HTMLTextAreaElement | null) => {
   if (inputA) inputA.value = '';
   if (inputB) inputB.value = '';
 
-  // Clone the current active config so the new profile starts with sane defaults
+  // Start new profiles with blank connection credentials — never clone provider,
+  // apiKey, or model from the active config, since mismatched provider×model
+  // combinations are the #1 source of broken profiles (e.g. gpt-4o saved under
+  // anthropic). Copy only non-sensitive behavioral defaults.
   const current = this.configs[this.currentConfig] || {};
   this.configs[trimmedName] = {
-    provider: current.provider ?? '',
-    apiKey: current.apiKey ?? '',
-    model: current.model ?? '',
-    customEndpoint: current.customEndpoint ?? '',
-    extraHeaders: current.extraHeaders || {},
-    systemPrompt: current.systemPrompt || '',
+    provider: '',
+    apiKey: '',
+    model: '',
+    customEndpoint: '',
+    extraHeaders: {},
+    systemPrompt: '',
     temperature: current.temperature ?? 0.7,
     maxTokens: current.maxTokens || 4096,
     contextLimit: current.contextLimit || 200000,
@@ -73,7 +197,23 @@ const resizeProfilePromptInput = (textarea: HTMLTextAreaElement | null) => {
   this.updateStatus(`Profile "${trimmedName}" created`, 'success');
 };
 
-(SidePanelUI.prototype as any).deleteConfig = async function deleteConfig() {
+sidePanelProto.resetAllProfiles = async function resetAllProfiles() {
+  try {
+    await chrome.runtime.sendMessage({ type: 'reset_all_profiles' });
+    this.configs = { default: { provider: '', apiKey: '', model: '', systemPrompt: this.getDefaultSystemPrompt(), temperature: 0.7, maxTokens: 4096, contextLimit: 200000, timeout: 30000, showThinking: true, streamResponses: true } };
+    this.providers = {};
+    this.currentConfig = 'default';
+    this.refreshConfigDropdown();
+    this.populateModelSelect?.();
+    this.updateModelDisplay?.();
+    this.renderProfileGrid?.();
+    this.updateStatus('All profiles and providers reset', 'success');
+  } catch (error) {
+    this.updateStatus('Failed to reset profiles', 'error');
+  }
+};
+
+sidePanelProto.deleteConfig = async function deleteConfig() {
   if (this.currentConfig === 'default') {
     this.updateStatus('Cannot delete default profile', 'warning');
     return;
@@ -81,7 +221,7 @@ const resizeProfilePromptInput = (textarea: HTMLTextAreaElement | null) => {
   await this.deleteProfileByName(this.currentConfig);
 };
 
-(SidePanelUI.prototype as any).deleteProfileByName = async function deleteProfileByName(name: string) {
+sidePanelProto.deleteProfileByName = async function deleteProfileByName(name: string) {
   if (!name || name === 'default') {
     this.updateStatus('Cannot delete default profile', 'warning');
     return;
@@ -103,7 +243,7 @@ const resizeProfilePromptInput = (textarea: HTMLTextAreaElement | null) => {
   this.updateStatus(`Profile "${name}" deleted`, 'success');
 };
 
-(SidePanelUI.prototype as any).switchConfig = async function switchConfig() {
+sidePanelProto.switchConfig = async function switchConfig() {
   const newConfig = this.elements.activeConfig.value;
   if (!this.configs[newConfig]) {
     this.updateStatus('Profile not found', 'warning');
@@ -114,7 +254,7 @@ const resizeProfilePromptInput = (textarea: HTMLTextAreaElement | null) => {
   await this.persistAllSettings({ silent: true });
 };
 
-(SidePanelUI.prototype as any).refreshConfigDropdown = function refreshConfigDropdown() {
+sidePanelProto.refreshConfigDropdown = function refreshConfigDropdown() {
   if (this.elements.activeConfig) {
     this.elements.activeConfig.innerHTML = '';
     Object.keys(this.configs).forEach((name) => {
@@ -129,15 +269,20 @@ const resizeProfilePromptInput = (textarea: HTMLTextAreaElement | null) => {
   }
   this.refreshProfileSelectors();
   this.updateModelDisplay();
-  this.renderProfileGrid();
+  this.renderTeamProfileList?.();
   this.updateContextUsage();
 };
 
-(SidePanelUI.prototype as any).refreshProfileSelectors = function refreshProfileSelectors() {
+sidePanelProto.refreshProfileSelectors = function refreshProfileSelectors() {
   const names = Object.keys(this.configs);
-  const selects = [this.elements.orchestratorProfile, this.elements.visionProfile];
+  const selects = [
+    this.elements.orchestratorProfile,
+    this.elements.visionProfile,
+    this.elements.orchestratorProfileVisible,
+  ];
   selects.forEach((select) => {
     if (!select) return;
+    const currentValue = select.value;
     select.innerHTML = '<option value="">Use active config</option>';
     names.forEach((name) => {
       const option = document.createElement('option');
@@ -146,15 +291,16 @@ const resizeProfilePromptInput = (textarea: HTMLTextAreaElement | null) => {
       select.appendChild(option);
     });
 
-    const currentValue = select.value;
     if (!currentValue) return;
     if (!names.includes(currentValue)) {
       select.value = '';
+      return;
     }
+    select.value = currentValue;
   });
 };
 
-(SidePanelUI.prototype as any).renderProfileGrid = function renderProfileGrid() {
+sidePanelProto.renderProfileGrid = function renderProfileGrid() {
   if (!this.elements.agentGrid) return;
   this.elements.agentGrid.innerHTML = '';
   const currentVision = this.elements.visionProfile?.value;
@@ -167,37 +313,103 @@ const resizeProfilePromptInput = (textarea: HTMLTextAreaElement | null) => {
   configs.forEach((name) => {
     const card = document.createElement('div');
     card.className = 'agent-card';
-    if (name === this.profileEditorTarget) {
+    const isEditing = name === this.profileEditorTarget;
+    if (isEditing) {
       card.classList.add('editing');
     }
     card.dataset.profile = name;
+    const config = materializeProfileWithProvider({ providers: this.providers, configs: this.configs }, name, this.configs[name] || {});
+    const isOAuth = String(config.provider || '').endsWith('-oauth');
+    if (isOAuth) card.classList.add('oauth-profile');
     const rolePills = ['main', 'vision', 'orchestrator', 'aux']
       .map((role) => {
         const isActive = this.isProfileActiveForRole(name, role, currentVision, currentOrchestrator);
         const label = this.getRoleLabel(role);
-        return `<span class="role-pill ${isActive ? 'active' : ''} ${role}-pill" data-role="${role}" data-profile="${name}">${label}</span>`;
+        return `<span class="role-pill ${isActive ? 'active' : ''} ${role}-pill" data-role="${role}" data-profile="${name}" title="Assign ${this.escapeHtml(
+          name,
+        )} as ${label.toLowerCase()} profile">${label}</span>`;
       })
       .join('');
-    const config = this.configs[name] || {};
     const deleteBtn =
-      name !== 'default'
+      name !== 'default' && !isOAuth
         ? `<button class="agent-card-delete" data-delete-profile="${this.escapeHtml(name)}" title="Delete profile">&times;</button>`
         : '';
+    const providerLabel = config.providerLabel || (isOAuth ? config.provider.replace(/-oauth$/, '') : config.provider || 'Provider');
+    const oauthTag = isOAuth ? '<span class="oauth-badge">OAuth</span>' : '';
     card.innerHTML = `
         <div class="agent-card-header">
           <div>
-            <h4>${this.escapeHtml(name)}</h4>
-            <span>${this.escapeHtml(config.provider || 'Provider')} · ${this.escapeHtml(config.model || 'Model')}</span>
+            <h4>${this.escapeHtml(name)}${oauthTag}</h4>
+            <span>${this.escapeHtml(providerLabel)} · ${this.escapeHtml(config.model || 'Model')}</span>
           </div>
           ${deleteBtn}
         </div>
         <div class="role-pills">${rolePills}</div>
+        ${isEditing ? '<div class="agent-card-editor-slot"></div>' : ''}
       `;
     this.elements.agentGrid.appendChild(card);
   });
+
+  // Delegated click handler for delete buttons, role pills, and card selection.
+  // Only bind once — use a flag to avoid stacking listeners on re-renders.
+  if (!(this.elements.agentGrid as any)._profileGridBound) {
+    (this.elements.agentGrid as any)._profileGridBound = true;
+    this.elements.agentGrid.addEventListener('click', (event: Event) => {
+      const target = event.target as HTMLElement;
+
+      // Delete button
+      const deleteBtn = target.closest<HTMLElement>('[data-delete-profile]');
+      if (deleteBtn) {
+        event.stopPropagation();
+        const profileName = deleteBtn.dataset.deleteProfile;
+        if (profileName) this.deleteProfileByName(profileName);
+        return;
+      }
+
+      // Role pill
+      const pill = target.closest<HTMLElement>('.role-pill');
+      if (pill) {
+        event.stopPropagation();
+        const profileName = pill.dataset.profile;
+        const role = pill.dataset.role;
+        if (profileName && role) this.assignProfileRole(profileName, role);
+        return;
+      }
+
+      // Card click — open editor for that profile
+      const card = target.closest<HTMLElement>('.agent-card');
+      if (card?.dataset.profile) {
+        this.editProfile(card.dataset.profile, true);
+      }
+    });
+  }
+
+  this.mountProfileEditorInGrid?.();
 };
 
-(SidePanelUI.prototype as any).getRoleLabel = function getRoleLabel(role: string) {
+sidePanelProto.mountProfileEditorInGrid = function mountProfileEditorInGrid() {
+  const editor = this.elements.profileEditor as HTMLElement | null;
+  const grid = this.elements.agentGrid as HTMLElement | null;
+  if (!editor || !grid) return;
+
+  const targetName = this.profileEditorTarget || this.currentConfig;
+  const cards = Array.from(grid.querySelectorAll<HTMLElement>('.agent-card'));
+  const targetCard = cards.find((card) => card.dataset.profile === targetName);
+  const targetSlot = targetCard?.querySelector<HTMLElement>('.agent-card-editor-slot');
+
+  if (!targetSlot) {
+    if (grid.nextElementSibling !== editor) {
+      grid.insertAdjacentElement('afterend', editor);
+    }
+    editor.classList.remove('profile-editor-inline');
+    return;
+  }
+
+  targetSlot.appendChild(editor);
+  editor.classList.add('profile-editor-inline');
+};
+
+sidePanelProto.getRoleLabel = function getRoleLabel(role: string) {
   switch (role) {
     case 'main':
       return 'Main';
@@ -210,7 +422,7 @@ const resizeProfilePromptInput = (textarea: HTMLTextAreaElement | null) => {
   }
 };
 
-(SidePanelUI.prototype as any).isProfileActiveForRole = function isProfileActiveForRole(
+sidePanelProto.isProfileActiveForRole = function isProfileActiveForRole(
   name: string,
   role: string,
   visionName?: string,
@@ -223,7 +435,7 @@ const resizeProfilePromptInput = (textarea: HTMLTextAreaElement | null) => {
   return false;
 };
 
-(SidePanelUI.prototype as any).assignProfileRole = function assignProfileRole(profileName: string, role: string) {
+sidePanelProto.assignProfileRole = function assignProfileRole(profileName: string, role: string) {
   if (!profileName) return;
   if (role === 'main') {
     this.setActiveConfig(profileName);
@@ -238,14 +450,24 @@ const resizeProfilePromptInput = (textarea: HTMLTextAreaElement | null) => {
   }
 };
 
-(SidePanelUI.prototype as any).toggleProfileRole = function toggleProfileRole(elementId: string, profileName: string) {
+sidePanelProto.toggleProfileRole = function toggleProfileRole(elementId: string, profileName: string) {
   const element = this.elements[elementId];
   if (!element) return;
-  element.value = element.value === profileName ? '' : profileName;
+  const isSelecting = element.value !== profileName;
+  element.value = isSelecting ? profileName : '';
+  if (elementId === 'orchestratorProfile') {
+    if (this.elements.orchestratorToggle) {
+      this.elements.orchestratorToggle.checked = isSelecting;
+    }
+    if (this.elements.orchestratorProfileSelectGroup) {
+      this.elements.orchestratorProfileSelectGroup.style.display = isSelecting ? '' : 'none';
+    }
+  }
   this.renderProfileGrid();
+  this.renderTeamProfileList?.();
 };
 
-(SidePanelUI.prototype as any).toggleAuxProfile = function toggleAuxProfile(profileName: string) {
+sidePanelProto.toggleAuxProfile = function toggleAuxProfile(profileName: string) {
   const idx = this.auxAgentProfiles.indexOf(profileName);
   if (idx === -1) {
     this.auxAgentProfiles.push(profileName);
@@ -256,51 +478,54 @@ const resizeProfilePromptInput = (textarea: HTMLTextAreaElement | null) => {
   this.renderProfileGrid();
 };
 
-(SidePanelUI.prototype as any).editProfile = function editProfile(name: string, silent = false) {
+sidePanelProto.editProfile = function editProfile(name: string, silent = false) {
   if (!name || !this.configs[name]) return;
   this.profileEditorTarget = name;
-  const config = this.configs[name];
-
+  const config = materializeProfileWithProvider({ providers: this.providers, configs: this.configs }, name, this.configs[name]);
+  const isOAuth = String(config.provider || '').endsWith('-oauth');
   // Only update profile editor elements if they exist
-  if (this.elements.profileEditorTitle) this.elements.profileEditorTitle.textContent = `Editing: ${name}`;
-  if (this.elements.profileEditorName) this.elements.profileEditorName.value = name;
-  if (this.elements.profileEditorProvider) this.elements.profileEditorProvider.value = config.provider || '';
-  if (this.elements.profileEditorApiKey) this.elements.profileEditorApiKey.value = config.apiKey || '';
-  if (this.elements.profileEditorModel) this.elements.profileEditorModel.value = config.model || '';
-  if (this.elements.profileEditorEndpoint) this.elements.profileEditorEndpoint.value = config.customEndpoint || '';
-  if (this.elements.profileEditorHeaders)
-    this.elements.profileEditorHeaders.value = formatHeadersJson(config.extraHeaders) || '';
-  if (this.elements.profileEditorTemperature) {
-    this.elements.profileEditorTemperature.value = config.temperature ?? 0.7;
-    if (this.elements.profileEditorTemperatureValue) {
-      this.elements.profileEditorTemperatureValue.textContent = this.elements.profileEditorTemperature.value;
-    }
+  if (this.elements.profileEditorTitle) {
+    const oauthBadge = isOAuth ? ' <span class="oauth-badge">OAuth</span>' : '';
+    this.elements.profileEditorTitle.innerHTML = `Editing: ${this.escapeHtml(name)}${oauthBadge}`;
   }
-  if (this.elements.profileEditorMaxTokens) this.elements.profileEditorMaxTokens.value = config.maxTokens || 2048;
-  if (this.elements.profileEditorContextLimit)
-    this.elements.profileEditorContextLimit.value = config.contextLimit || 200000;
-  if (this.elements.profileEditorTimeout) this.elements.profileEditorTimeout.value = config.timeout || 30000;
-  if (this.elements.profileEditorEnableScreenshots)
-    this.elements.profileEditorEnableScreenshots.value = config.enableScreenshots ? 'true' : 'false';
-  if (this.elements.profileEditorSendScreenshots)
-    this.elements.profileEditorSendScreenshots.value = config.sendScreenshotsAsImages ? 'true' : 'false';
+  if (this.elements.profileEditorName) {
+    this.elements.profileEditorName.value = name;
+    this.elements.profileEditorName.readOnly = isOAuth;
+    this.elements.profileEditorName.classList.toggle('oauth-readonly', isOAuth);
+  }
+  if (this.elements.profileEditorProvider) {
+    this.elements.profileEditorProvider.value = config.providerId || '';
+    (this.elements.profileEditorProvider as HTMLSelectElement).disabled = false;
+  }
+  if (this.elements.profileEditorModelInput) {
+    this.elements.profileEditorModelInput.value = config.modelId || config.model || '';
+  }
+  if (this.elements.profileEditorModel) {
+    const modelVal = config.modelId || config.model || '';
+    const modelSelect = this.elements.profileEditorModel as HTMLSelectElement;
+    if (modelVal && !Array.from(modelSelect.options).some((o: HTMLOptionElement) => o.value === modelVal)) {
+      const opt = document.createElement('option');
+      opt.value = modelVal;
+      opt.textContent = modelVal;
+      modelSelect.insertBefore(opt, modelSelect.options[1] || null);
+    }
+    modelSelect.value = modelVal;
+  }
+  applyNumberBindings(this.elements, config, PROFILE_EDITOR_NUMBER_BINDINGS);
+  if (this.elements.profileEditorTemperatureValue) {
+    this.elements.profileEditorTemperatureValue.textContent = readControlValue(
+      this.elements,
+      'profileEditorTemperature',
+    );
+  }
+  applyBooleanBindings(this.elements, config, PROFILE_EDITOR_BOOLEAN_BINDINGS);
   if (this.elements.profileEditorScreenshotQuality)
     this.elements.profileEditorScreenshotQuality.value = config.screenshotQuality || 'high';
-  if (this.elements.profileEditorShowThinking)
-    this.elements.profileEditorShowThinking.value = config.showThinking !== false ? 'true' : 'false';
-  if (this.elements.profileEditorStreamResponses)
-    this.elements.profileEditorStreamResponses.value = config.streamResponses !== false ? 'true' : 'false';
-  if (this.elements.profileEditorAutoScroll)
-    this.elements.profileEditorAutoScroll.value = config.autoScroll !== false ? 'true' : 'false';
-  if (this.elements.profileEditorConfirmActions)
-    this.elements.profileEditorConfirmActions.value = config.confirmActions !== false ? 'true' : 'false';
-  if (this.elements.profileEditorSaveHistory)
-    this.elements.profileEditorSaveHistory.value = config.saveHistory !== false ? 'true' : 'false';
   if (this.elements.profileEditorPrompt)
     this.elements.profileEditorPrompt.value = config.systemPrompt || this.getDefaultSystemPrompt();
   resizeProfilePromptInput(this.elements.profileEditorPrompt);
 
-  this.toggleProfileEditorEndpoint();
+  this.refreshProviderMetaForProfileEditor?.();
   this.refreshProfileJsonEditor?.();
   this.refreshModelCatalogForProfileEditor?.();
   this.renderProfileGrid();
@@ -309,38 +534,37 @@ const resizeProfilePromptInput = (textarea: HTMLTextAreaElement | null) => {
   }
 };
 
-(SidePanelUI.prototype as any).collectProfileEditorData = function collectProfileEditorData() {
+sidePanelProto.collectProfileEditorData = function collectProfileEditorData() {
+  const providerId = String(this.elements.profileEditorProvider.value || '').trim();
+  const providerInstance = getProviderInstance({ providers: this.providers }, providerId);
+  const provider = String(providerInstance?.providerType || '').trim();
+  const rawModel = (
+    this.elements.profileEditorModelInput?.value ||
+    this.elements.profileEditorModel.value ||
+    ''
+  ).trim();
+  const model = provider.endsWith('-oauth') ? normalizeOAuthModelIdForProvider(provider, rawModel) : rawModel;
+  const numericValues = readNumberBindings(this.elements, PROFILE_EDITOR_NUMBER_BINDINGS);
+  const booleanValues = readBooleanBindings(this.elements, PROFILE_EDITOR_BOOLEAN_BINDINGS);
   return {
-    provider: this.elements.profileEditorProvider.value,
-    apiKey: this.elements.profileEditorApiKey.value,
-    model: this.elements.profileEditorModel.value,
-    customEndpoint: this.elements.profileEditorEndpoint.value,
+    providerId,
+    providerLabel: providerInstance?.name || '',
+    provider,
+    apiKey: providerInstance?.authType === 'api-key' ? providerInstance.apiKey || '' : '',
+    modelId: model,
+    model,
+    customEndpoint: providerInstance?.customEndpoint || '',
     extraHeaders: (() => {
-      const raw = this.elements.profileEditorHeaders?.value || '';
-      if (!raw.trim()) return {};
-      try {
-        return parseHeadersJson(raw);
-      } catch {
-        return {};
-      }
+      return providerInstance?.extraHeaders || {};
     })(),
-    temperature: Number.parseFloat(this.elements.profileEditorTemperature.value) || 0.7,
-    maxTokens: Number.parseInt(this.elements.profileEditorMaxTokens.value) || 2048,
-    contextLimit: Number.parseInt(this.elements.profileEditorContextLimit?.value || '') || 200000,
-    timeout: Number.parseInt(this.elements.profileEditorTimeout.value) || 30000,
-    enableScreenshots: this.elements.profileEditorEnableScreenshots.value === 'true',
-    sendScreenshotsAsImages: this.elements.profileEditorSendScreenshots.value === 'true',
+    ...numericValues,
+    ...booleanValues,
     screenshotQuality: this.elements.profileEditorScreenshotQuality.value || 'high',
-    showThinking: this.elements.profileEditorShowThinking?.value !== 'false',
-    streamResponses: this.elements.profileEditorStreamResponses?.value !== 'false',
-    autoScroll: this.elements.profileEditorAutoScroll?.value !== 'false',
-    confirmActions: this.elements.profileEditorConfirmActions?.value !== 'false',
-    saveHistory: this.elements.profileEditorSaveHistory?.value !== 'false',
     systemPrompt: this.elements.profileEditorPrompt.value || this.getDefaultSystemPrompt(),
   };
 };
 
-(SidePanelUI.prototype as any).saveProfileEdits = async function saveProfileEdits() {
+sidePanelProto.saveProfileEdits = async function saveProfileEdits() {
   const target = this.profileEditorTarget;
   if (!target || !this.configs[target]) {
     this.updateStatus('Select a profile to edit', 'warning');
@@ -371,21 +595,22 @@ const resizeProfilePromptInput = (textarea: HTMLTextAreaElement | null) => {
 
   const existing = this.configs[target] || {};
   const updated = { ...existing, ...this.collectProfileEditorData() };
+  const providerInstance = getProviderInstance({ providers: this.providers }, String(updated.providerId || ''));
+  if (providerInstance && updated.modelId) {
+    const nextProvider = ensureProviderModel(providerInstance, updated.modelId);
+    this.providers = { ...(this.providers || {}), [nextProvider.id]: nextProvider };
+    if (!updated.contextLimit) {
+      const matchedModel = nextProvider.models.find((model) => model.id === updated.modelId);
+      if (matchedModel?.contextWindow) updated.contextLimit = matchedModel.contextWindow;
+    }
+  }
 
   if (isRename) {
     // Move config to new key
     this.configs[newName] = updated;
     delete this.configs[target];
 
-    // Update references
-    if (this.currentConfig === target) this.currentConfig = newName;
-    this.profileEditorTarget = newName;
-
-    // Update role selectors if they referenced the old name
-    if (this.elements.visionProfile?.value === target) this.elements.visionProfile.value = newName;
-    if (this.elements.orchestratorProfile?.value === target) this.elements.orchestratorProfile.value = newName;
-    const auxIdx = this.auxAgentProfiles.indexOf(target);
-    if (auxIdx !== -1) this.auxAgentProfiles[auxIdx] = newName;
+    renameProfileReferences(this, target, newName);
 
     if (this.elements.profileEditorTitle) this.elements.profileEditorTitle.textContent = `Editing: ${newName}`;
     this.refreshConfigDropdown();
@@ -399,45 +624,33 @@ const resizeProfilePromptInput = (textarea: HTMLTextAreaElement | null) => {
       this.toggleCustomEndpoint();
     }
     this.renderProfileGrid();
+    this.populateModelSelect();
     this.updateStatus(`Profile "${target}" saved`, 'success');
   }
 };
 
-(SidePanelUI.prototype as any).populateFormFromConfig = function populateFormFromConfig(
-  config: Record<string, any> = {},
-) {
+sidePanelProto.populateFormFromConfig = function populateFormFromConfig(config: Record<string, any> = {}) {
   // Use optional chaining for all element accesses since settings UI may be simplified
   if (this.elements.provider) this.elements.provider.value = config.provider || '';
   if (this.elements.apiKey) this.elements.apiKey.value = config.apiKey || '';
-  if (this.elements.model) this.elements.model.value = config.model || '';
+  // Setup model field is freeform input + suggestions list.
+  if (this.elements.model) {
+    const modelVal = config.model || '';
+    this.elements.model.value = modelVal;
+  }
   if (this.elements.customEndpoint) this.elements.customEndpoint.value = config.customEndpoint || '';
   if (this.elements.customHeaders) this.elements.customHeaders.value = formatHeadersJson(config.extraHeaders) || '';
   if (this.elements.systemPrompt)
     this.elements.systemPrompt.value = config.systemPrompt || this.getDefaultSystemPrompt();
-  if (this.elements.temperature) {
-    this.elements.temperature.value = config.temperature !== undefined ? config.temperature : 0.7;
-    if (this.elements.temperatureValue) {
-      this.elements.temperatureValue.textContent = this.elements.temperature.value;
-    }
+  applyNumberBindings(this.elements, config, SETTINGS_FORM_NUMBER_BINDINGS);
+  if (this.elements.temperatureValue) {
+    this.elements.temperatureValue.textContent = readControlValue(this.elements, 'temperature');
   }
-  if (this.elements.maxTokens) this.elements.maxTokens.value = config.maxTokens || 4096;
-  if (this.elements.contextLimit) this.elements.contextLimit.value = config.contextLimit || 200000;
-  if (this.elements.timeout) this.elements.timeout.value = config.timeout || 30000;
-  if (this.elements.enableScreenshots)
-    this.elements.enableScreenshots.value = config.enableScreenshots ? 'true' : 'false';
-  if (this.elements.sendScreenshotsAsImages)
-    this.elements.sendScreenshotsAsImages.value = config.sendScreenshotsAsImages ? 'true' : 'false';
+  applyBooleanBindings(this.elements, config, SETTINGS_FORM_BOOLEAN_BINDINGS);
   if (this.elements.screenshotQuality) this.elements.screenshotQuality.value = config.screenshotQuality || 'high';
-  if (this.elements.streamResponses)
-    this.elements.streamResponses.value = config.streamResponses !== false ? 'true' : 'false';
-  if (this.elements.showThinking) this.elements.showThinking.value = config.showThinking !== false ? 'true' : 'false';
-  if (this.elements.autoScroll) this.elements.autoScroll.value = config.autoScroll !== false ? 'true' : 'false';
-  if (this.elements.confirmActions)
-    this.elements.confirmActions.value = config.confirmActions !== false ? 'true' : 'false';
-  if (this.elements.saveHistory) this.elements.saveHistory.value = config.saveHistory !== false ? 'true' : 'false';
 };
 
-(SidePanelUI.prototype as any).setActiveConfig = function setActiveConfig(name: string, quiet = false) {
+sidePanelProto.setActiveConfig = function setActiveConfig(name: string, quiet = false) {
   if (!this.configs[name]) return;
   this.currentConfig = name;
   if (this.elements.activeConfig) this.elements.activeConfig.value = name;
@@ -452,14 +665,24 @@ const resizeProfilePromptInput = (textarea: HTMLTextAreaElement | null) => {
   }
 };
 
-(SidePanelUI.prototype as any).refreshProfileJsonEditor = function refreshProfileJsonEditor() {
+sidePanelProto.refreshProfileJsonEditor = function refreshProfileJsonEditor() {
   if (!this.elements.profileJsonEditor) return;
   const target = this.profileEditorTarget || this.currentConfig;
   const config = this.configs[target] || {};
   this.elements.profileJsonEditor.value = JSON.stringify(config, null, 2);
 };
 
-(SidePanelUI.prototype as any).copyProfileJsonEditor = async function copyProfileJsonEditor() {
+sidePanelProto.refreshProviderMetaForProfileEditor = function refreshProviderMetaForProfileEditor() {
+  const providerId = String(this.elements.profileEditorProvider?.value || '').trim();
+  const provider = getProviderInstance({ providers: this.providers }, providerId);
+  const title = this.elements.profileEditorTitle as HTMLElement | null;
+  const target = this.profileEditorTarget || this.currentConfig;
+  if (title && provider) {
+    title.innerHTML = `Editing: ${this.escapeHtml(target)} <span class="oauth-badge">${this.escapeHtml(provider.name)}</span>`;
+  }
+};
+
+sidePanelProto.copyProfileJsonEditor = async function copyProfileJsonEditor() {
   if (!this.elements.profileJsonEditor) return;
   const text = this.elements.profileJsonEditor.value || '';
   if (!text.trim()) {
@@ -474,7 +697,7 @@ const resizeProfilePromptInput = (textarea: HTMLTextAreaElement | null) => {
   }
 };
 
-(SidePanelUI.prototype as any).applyProfileJsonEditor = async function applyProfileJsonEditor() {
+sidePanelProto.applyProfileJsonEditor = async function applyProfileJsonEditor() {
   if (!this.elements.profileJsonEditor) return;
   const target = this.profileEditorTarget || this.currentConfig;
   if (!target || !this.configs[target]) {

@@ -1,25 +1,30 @@
-import { ACCOUNT_MODE_BYOK, ACCOUNT_MODE_KEY, ACCOUNT_MODE_PAID, hasConfiguredByokProvider } from './account-mode.js';
 import {
   CONVEX_DEPLOYMENT_URL,
   createCreditCheckout,
   getAuthState,
   hasActiveSubscription,
+  isUsableRuntimeJwt,
   manageSubscription,
   signInWithOAuth,
   signInWithPassword,
   signOutAccount,
   signUpWithPassword,
 } from '../../../convex/client.js';
+import { buildProviderInstanceId } from '../../../state/provider-registry.js';
 import { SidePanelUI } from '../core/panel-ui.js';
+const sidePanelProto = SidePanelUI.prototype as SidePanelUI & Record<string, unknown>;
+
+import { ACCOUNT_MODE_BYOK, ACCOUNT_MODE_KEY, ACCOUNT_MODE_PAID, hasConfiguredByokProvider } from './account-mode.js';
 
 const setHidden = (element: Element | null | undefined, hidden: boolean) => {
   if (!element) return;
   element.classList.toggle('hidden', hidden);
 };
 
-const toUsageLabel = (usage: any) => {
-  const requestCount = Number(usage?.requestCount || 0);
-  const tokensUsed = Number(usage?.tokensUsed || 0);
+const toUsageLabel = (usage: unknown) => {
+  const u = usage as { requestCount?: unknown; tokensUsed?: unknown };
+  const requestCount = Number(u?.requestCount || 0);
+  const tokensUsed = Number(u?.tokensUsed || 0);
   return `${requestCount} req · ${tokensUsed} tokens`;
 };
 
@@ -92,12 +97,7 @@ const normalizeManagedModelId = (modelId: string) => {
   if (!model) return PARCHI_PAID_DEFAULT_MODEL;
   if (model.includes('/')) return model;
   const lower = model.toLowerCase();
-  if (
-    lower.startsWith('gpt-') ||
-    lower.startsWith('o1') ||
-    lower.startsWith('o3') ||
-    lower.startsWith('o4')
-  ) {
+  if (lower.startsWith('gpt-') || lower.startsWith('o1') || lower.startsWith('o3') || lower.startsWith('o4')) {
     return `openai/${model}`;
   }
   if (lower.startsWith('claude')) return `anthropic/${model}`;
@@ -114,8 +114,24 @@ const hasConfiguredModel = (profile: Record<string, any> | null | undefined) =>
 const hasConfiguredApiKey = (profile: Record<string, any> | null | undefined) =>
   Boolean(String(profile?.apiKey || '').trim());
 
+const isOAuthProvider = (provider: unknown) =>
+  String(provider || '')
+    .trim()
+    .toLowerCase()
+    .endsWith('-oauth');
+
+const hasRunnableExternalProfile = (profile: Record<string, any> | null | undefined) => {
+  if (!hasConfiguredModel(profile)) return false;
+  const provider = String(profile?.provider || '')
+    .trim()
+    .toLowerCase();
+  if (!provider || isManagedProvider(provider)) return false;
+  if (isOAuthProvider(provider)) return true;
+  return hasConfiguredApiKey(profile);
+};
+
 const hasRunnableByokProfile = (profiles: Array<Record<string, any>>) =>
-  profiles.some((profile) => hasConfiguredApiKey(profile) && hasConfiguredModel(profile));
+  profiles.some((profile) => hasRunnableExternalProfile(profile));
 
 const collectCandidateProfiles = (stored: Record<string, any>) => {
   const configs = isRecord(stored.configs) ? stored.configs : {};
@@ -130,7 +146,9 @@ const collectCandidateProfiles = (stored: Record<string, any>) => {
 };
 
 const isManagedProvider = (provider: unknown) => {
-  const normalized = String(provider || '').trim().toLowerCase();
+  const normalized = String(provider || '')
+    .trim()
+    .toLowerCase();
   return normalized === 'parchi' || normalized === 'openrouter';
 };
 
@@ -233,7 +251,10 @@ const buildSpendSeries = (transactions: any[], days = 7) => {
   return points;
 };
 
-const renderSpendBars = (container: HTMLElement | null | undefined, points: Array<{ key: number; label: string; cents: number }>) => {
+const renderSpendBars = (
+  container: HTMLElement | null | undefined,
+  points: Array<{ key: number; label: string; cents: number }>,
+) => {
   if (!container) return;
   container.innerHTML = '';
   const maxCents = points.reduce((max, point) => Math.max(max, point.cents), 0);
@@ -318,7 +339,7 @@ const renderUsageCharts = (
   }
 };
 
-(SidePanelUI.prototype as any).setAccountUiBusy = function setAccountUiBusy(busy: boolean) {
+sidePanelProto.setAccountUiBusy = function setAccountUiBusy(busy: boolean) {
   const buttonIds = [
     'accountSignInBtn',
     'accountSignUpBtn',
@@ -340,7 +361,7 @@ const renderUsageCharts = (
   });
 };
 
-(SidePanelUI.prototype as any).bindAccountEventListeners = function bindAccountEventListeners() {
+sidePanelProto.bindAccountEventListeners = function bindAccountEventListeners() {
   if (this._accountListenersBound) return;
   this._accountListenersBound = true;
 
@@ -384,12 +405,13 @@ const renderUsageCharts = (
   });
 };
 
-(SidePanelUI.prototype as any).ensureManagedProviderDefaults = async function ensureManagedProviderDefaults(
+sidePanelProto.ensureManagedProviderDefaults = async function ensureManagedProviderDefaults(
   options: { forceActivate?: boolean } = {},
 ) {
   const stored = await chrome.storage.local.get([
     'activeConfig',
     'configs',
+    'providers',
     'provider',
     'apiKey',
     'model',
@@ -400,22 +422,18 @@ const renderUsageCharts = (
   ]);
   const activeConfig = String(stored.activeConfig || 'default');
   const configs = isRecord(stored.configs) ? { ...stored.configs } : {};
+  const providers = isRecord(stored.providers) ? { ...stored.providers } : {};
   const mode = String(stored[ACCOUNT_MODE_KEY] || '').toLowerCase();
-  const hasCredits = Number(stored.convexCreditBalanceCents || 0) > 0;
-  const paidActive =
-    String(stored.convexSubscriptionPlan || '').toLowerCase() === 'pro' &&
-    String(stored.convexSubscriptionStatus || '').toLowerCase() === 'active';
-  const hasPaidAccess = hasCredits || paidActive;
-  const shouldActivateManaged = Boolean(options.forceActivate || (mode === ACCOUNT_MODE_PAID && hasPaidAccess));
+  const shouldActivateManaged = Boolean(options.forceActivate);
   if (mode !== ACCOUNT_MODE_PAID && !options.forceActivate) return;
 
   const existingManaged = isRecord(configs[MANAGED_PROFILE_NAME]) ? { ...configs[MANAGED_PROFILE_NAME] } : {};
   const activeProfile = isRecord(configs[activeConfig]) ? { ...configs[activeConfig] } : {};
-  const activeProvider = String(activeProfile.provider || '').trim().toLowerCase();
+  const activeProvider = String(activeProfile.provider || '')
+    .trim()
+    .toLowerCase();
   const activeModelCandidate =
-    activeProvider === 'openrouter' || activeProvider === 'parchi'
-      ? String(activeProfile.model || '').trim()
-      : '';
+    activeProvider === 'openrouter' || activeProvider === 'parchi' ? String(activeProfile.model || '').trim() : '';
   const existingManagedModel = String(existingManaged.model || '').trim();
   const prefersLegacyManagedDefault = existingManagedModel === LEGACY_MANAGED_DEFAULT_MODEL;
   const resolvedModel = String(
@@ -424,8 +442,30 @@ const renderUsageCharts = (
       PARCHI_PAID_DEFAULT_MODEL,
   ).trim();
 
+  const managedProviderId =
+    String(existingManaged.providerId || '') ||
+    buildProviderInstanceId({
+      providerType: 'parchi',
+      authType: 'managed',
+      name: 'Parchi Managed',
+    });
+  providers[managedProviderId] = {
+    id: managedProviderId,
+    name: 'Parchi Managed',
+    providerType: 'parchi',
+    authType: 'managed',
+    isConnected: true,
+    models: [{ id: normalizeManagedModelId(resolvedModel), label: normalizeManagedModelId(resolvedModel) }],
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    source: 'manual',
+  };
+
   const managedProfile = {
     ...existingManaged,
+    providerId: managedProviderId,
+    modelId: normalizeManagedModelId(resolvedModel),
+    providerLabel: 'Parchi Managed',
     provider: 'parchi',
     apiKey: '',
     model: normalizeManagedModelId(resolvedModel),
@@ -437,6 +477,7 @@ const renderUsageCharts = (
 
   await chrome.storage.local.set({
     activeConfig: nextActiveConfig,
+    providers,
     configs,
     provider: String(nextActiveProfile.provider || ''),
     apiKey: String(nextActiveProfile.apiKey || ''),
@@ -449,6 +490,10 @@ const renderUsageCharts = (
   this.configs = {
     ...this.configs,
     ...configs,
+  };
+  this.providers = {
+    ...(this.providers || {}),
+    ...providers,
   };
   if (this.configs[MANAGED_PROFILE_NAME]) {
     this.configs[MANAGED_PROFILE_NAME].provider = 'parchi';
@@ -464,7 +509,7 @@ const renderUsageCharts = (
   }
 };
 
-(SidePanelUI.prototype as any).getSetupFlowState = async function getSetupFlowState() {
+sidePanelProto.getSetupFlowState = async function getSetupFlowState() {
   const stored = await chrome.storage.local.get(ACCOUNT_SETUP_STORAGE_KEYS as unknown as string[]);
   const mode = String(stored[ACCOUNT_MODE_KEY] || '').toLowerCase();
   const hasChoice = mode === ACCOUNT_MODE_BYOK || mode === ACCOUNT_MODE_PAID;
@@ -475,7 +520,9 @@ const renderUsageCharts = (
   const activeConfig = String(stored.activeConfig || 'default');
   const configs = isRecord(stored.configs) ? stored.configs : {};
   const activeProfile = isRecord(configs[activeConfig]) ? configs[activeConfig] : {};
-  const activeProvider = String(activeProfile.provider || stored.provider || '').trim().toLowerCase();
+  const activeProvider = String(activeProfile.provider || stored.provider || '')
+    .trim()
+    .toLowerCase();
   const activeModel = String(activeProfile.model || stored.model || '').trim();
   const paidProfiles = profiles.filter((profile) => isManagedProvider(profile?.provider));
   const hasPaidModelConfigured =
@@ -483,7 +530,7 @@ const renderUsageCharts = (
     paidProfiles.some((profile) => hasConfiguredModel(profile));
 
   const hasConvexUrl = Boolean(String(stored.convexUrl || CONVEX_DEPLOYMENT_URL || '').trim());
-  const signedInPaid = Boolean(String(stored.convexAccessToken || '').trim());
+  const signedInPaid = isUsableRuntimeJwt(stored.convexAccessToken, stored.convexTokenExpiresAt, { minRemainingMs: 0 });
   const creditCents = Number(stored.convexCreditBalanceCents || 0);
   const hasCredits = Number.isFinite(creditCents) && creditCents > 0;
   const subscriptionPlan = String(stored.convexSubscriptionPlan || '').toLowerCase();
@@ -504,9 +551,10 @@ const renderUsageCharts = (
       }
     : null;
 
+  const paidSetupComplete = hasPaidModelConfigured && hasConvexUrl && signedInPaid && paidAccess;
   let setupComplete = byokReady;
   if (!setupComplete && mode === ACCOUNT_MODE_PAID) {
-    setupComplete = hasPaidModelConfigured && hasConvexUrl && signedInPaid && paidAccess;
+    setupComplete = paidSetupComplete;
   }
 
   let setupButtonLabel = 'Pay or add your own key';
@@ -574,6 +622,10 @@ const renderUsageCharts = (
     hasAnyModel,
     byokReady,
     paidAccess,
+    paidActive,
+    hasConvexUrl,
+    signedInPaid,
+    paidSetupComplete,
     setupComplete,
     setupButtonLabel,
     paidStatusLabel,
@@ -582,7 +634,7 @@ const renderUsageCharts = (
   };
 };
 
-(SidePanelUI.prototype as any).refreshSetupFlowUi = async function refreshSetupFlowUi() {
+sidePanelProto.refreshSetupFlowUi = async function refreshSetupFlowUi() {
   const setupState = await this.getSetupFlowState();
   const showSetupButton = !setupState.setupComplete;
   setHidden(this.elements.setupAccessBtn, !showSetupButton);
@@ -593,47 +645,60 @@ const renderUsageCharts = (
     this.elements.setupAccessBtn.title = setupState.setupButtonLabel;
   }
 
-  if (this.elements.paidStatusBadge) {
-    const shouldShowPaidBadge = setupState.mode === ACCOUNT_MODE_PAID || !setupState.hasConfiguredProvider;
-    if (!shouldShowPaidBadge) {
-      this.elements.paidStatusBadge.classList.add('hidden');
-      this.elements.paidStatusBadge.classList.remove('is-active', 'is-warning', 'is-error');
-      this.elements.paidStatusBadge.title = '';
-      this.paidStatusHoverLabel = '';
-    } else {
-      const detail = String(setupState.paidStatusDetail || '').trim();
-      const paidLabel = String(setupState.paidStatusLabel || 'Paid: unavailable');
-      const badgeText = this.elements.paidStatusBadge.querySelector('.paid-status-text') as HTMLElement | null;
-      if (badgeText) {
-        badgeText.textContent = paidLabel;
-      } else {
-        this.elements.paidStatusBadge.textContent = paidLabel;
-      }
-      this.elements.paidStatusBadge.title = detail ? `${setupState.paidStatusLabel} — ${detail}` : setupState.paidStatusLabel;
-      this.paidStatusHoverLabel = detail ? `${paidLabel}: ${detail}` : paidLabel;
-      this.elements.paidStatusBadge.classList.remove('hidden', 'is-active', 'is-warning', 'is-error');
-      if (setupState.paidStatusTone === 'error') {
-        this.elements.paidStatusBadge.classList.add('is-error');
-      } else if (setupState.paidStatusTone === 'active') {
-        this.elements.paidStatusBadge.classList.add('is-active');
-      } else {
-        this.elements.paidStatusBadge.classList.add('is-warning');
-      }
-    }
-  }
+  await this.renderPaidModeProviderGrid?.();
   this.updateActivityState?.();
 };
 
-(SidePanelUI.prototype as any).setParchiRuntimeHealth = async function setParchiRuntimeHealth(
-  input: { level: 'warning' | 'error'; summary?: string; detail?: string; category?: string },
-) {
+sidePanelProto.renderPaidModeProviderGrid = async function renderPaidModeProviderGrid() {
+  const grid = this.elements.paidModeProviderGrid || document.getElementById('paidModeProviderGrid');
+  if (!grid) return;
+
+  const setupState = await this.getSetupFlowState();
+  const row = document.createElement('div');
+  const connected = setupState.signedInPaid === true && setupState.paidAccess === true;
+  row.className = `provider-row${connected ? ' connected' : ' dim'}`;
+  row.innerHTML = `
+    <span class="provider-logo">☻</span>
+    <div class="provider-info">
+      <div class="provider-name">Parchi Managed <span class="optional-badge">Optional</span></div>
+      <div class="provider-meta">${this.escapeHtml(setupState.paidStatusLabel || 'Paid mode')}</div>
+    </div>
+    <span class="provider-status-dot${connected ? '' : ' off'}"></span>
+    <button class="connect-btn" data-action="open-account">${connected ? 'Manage' : 'Open billing'}</button>
+  `;
+
+  grid.innerHTML = '';
+  grid.appendChild(row);
+  row.addEventListener('click', async (event: Event) => {
+    const action = (event.target as HTMLElement).closest<HTMLElement>('[data-action]')?.dataset.action;
+    if (action !== 'open-account') return;
+    this.openAccountPanel?.();
+    if (!setupState.signedInPaid || !setupState.paidSetupComplete) {
+      this.updateStatus(
+        'Paid mode is optional. Sign in or buy credits from Account & Billing if you want managed routing.',
+        'active',
+      );
+    }
+  });
+};
+
+sidePanelProto.setParchiRuntimeHealth = async function setParchiRuntimeHealth(input: {
+  level: 'warning' | 'error';
+  summary?: string;
+  detail?: string;
+  category?: string;
+}) {
   try {
     const profile = isRecord(this.configs?.[this.currentConfig]) ? this.configs[this.currentConfig] : {};
-    const provider = String(profile?.provider || '').trim().toLowerCase();
+    const provider = String(profile?.provider || '')
+      .trim()
+      .toLowerCase();
     if (!isManagedProvider(provider)) return;
 
     const stored = await chrome.storage.local.get([ACCOUNT_MODE_KEY]);
-    const mode = String(stored[ACCOUNT_MODE_KEY] || '').trim().toLowerCase();
+    const mode = String(stored[ACCOUNT_MODE_KEY] || '')
+      .trim()
+      .toLowerCase();
     if (mode !== ACCOUNT_MODE_PAID) return;
 
     const summary = String(input.summary || '').trim();
@@ -653,7 +718,7 @@ const renderUsageCharts = (
   }
 };
 
-(SidePanelUI.prototype as any).clearParchiRuntimeHealth = async function clearParchiRuntimeHealth() {
+sidePanelProto.clearParchiRuntimeHealth = async function clearParchiRuntimeHealth() {
   try {
     await chrome.storage.local.remove([PARCHI_RUNTIME_STATUS_KEY]);
     await this.refreshSetupFlowUi?.();
@@ -662,7 +727,7 @@ const renderUsageCharts = (
   }
 };
 
-(SidePanelUI.prototype as any).handleSetupAccessClick = async function handleSetupAccessClick() {
+sidePanelProto.handleSetupAccessClick = async function handleSetupAccessClick() {
   const setupState = await this.getSetupFlowState();
   if (!setupState.hasChoice && !setupState.hasConfiguredProvider) {
     setHidden(this.elements.accountOnboardingModal, false);
@@ -671,25 +736,26 @@ const renderUsageCharts = (
     return;
   }
 
-  this.openSettingsPanel?.();
   if (setupState.mode === ACCOUNT_MODE_PAID) {
-    this.switchSettingsTab?.('oauth');
-    this.updateStatus('Finish paid setup to unlock Parchi managed access.', 'active');
+    this.openAccountPanel?.();
+    this.updateStatus('Finish paid setup in Account & Billing to unlock Parchi managed access.', 'active');
     return;
   }
 
+  this.openSettingsPanel?.();
   this.switchSettingsTab?.('setup');
   this.updateStatus('Finish provider setup by adding your API key and model.', 'active');
 };
 
-(SidePanelUI.prototype as any).initAccountPanel = async function initAccountPanel() {
+sidePanelProto.initAccountPanel = async function initAccountPanel() {
   this.bindAccountEventListeners();
   await this.refreshAccountPanel({ silent: true });
   await this.showAccountOnboardingIfNeeded();
   await this.refreshSetupFlowUi();
+  this.renderOAuthProviderGrid?.();
 };
 
-(SidePanelUI.prototype as any).showAccountOnboardingIfNeeded = async function showAccountOnboardingIfNeeded() {
+sidePanelProto.showAccountOnboardingIfNeeded = async function showAccountOnboardingIfNeeded() {
   const stored = await chrome.storage.local.get(ACCOUNT_SETUP_STORAGE_KEYS as unknown as string[]);
   const hasChoice = stored[ACCOUNT_MODE_KEY] === ACCOUNT_MODE_BYOK || stored[ACCOUNT_MODE_KEY] === ACCOUNT_MODE_PAID;
   if (hasChoice) {
@@ -713,7 +779,7 @@ const renderUsageCharts = (
   await this.refreshSetupFlowUi();
 };
 
-(SidePanelUI.prototype as any).chooseAccountMode = async function chooseAccountMode(mode: 'byok' | 'paid') {
+sidePanelProto.chooseAccountMode = async function chooseAccountMode(mode: 'byok' | 'paid') {
   await chrome.storage.local.set({ [ACCOUNT_MODE_KEY]: mode });
   if (mode === ACCOUNT_MODE_BYOK) {
     await chrome.storage.local.remove([PARCHI_RUNTIME_STATUS_KEY]);
@@ -735,9 +801,7 @@ const renderUsageCharts = (
   await this.refreshSetupFlowUi();
 };
 
-(SidePanelUI.prototype as any).handleAccountPasswordAuth = async function handleAccountPasswordAuth(
-  mode: 'signIn' | 'signUp',
-) {
+sidePanelProto.handleAccountPasswordAuth = async function handleAccountPasswordAuth(mode: 'signIn' | 'signUp') {
   const email = String(this.elements.accountEmailInput?.value || '').trim();
   const password = String(this.elements.accountPasswordInput?.value || '').trim();
   if (!email || !password) {
@@ -765,7 +829,7 @@ const renderUsageCharts = (
   }
 };
 
-(SidePanelUI.prototype as any).handleAccountOAuth = async function handleAccountOAuth(provider: 'google' | 'github') {
+sidePanelProto.handleAccountOAuth = async function handleAccountOAuth(provider: 'google' | 'github') {
   this.setAccountUiBusy(true);
   const previousStoredMode = await chrome.storage.local.get([ACCOUNT_MODE_KEY]);
   const previousMode = String(previousStoredMode[ACCOUNT_MODE_KEY] || '').toLowerCase();
@@ -808,14 +872,12 @@ const renderUsageCharts = (
   }
 };
 
-(SidePanelUI.prototype as any).startAccountCheckout = async function startAccountCheckout() {
+sidePanelProto.startAccountCheckout = async function startAccountCheckout() {
   // Default upgrade goes to $15 credit pack
   return this.startCreditCheckout(1500);
 };
 
-(SidePanelUI.prototype as any).pollForCreditBalanceIncrease = async function pollForCreditBalanceIncrease(
-  initialCreditCents: number,
-) {
+sidePanelProto.pollForCreditBalanceIncrease = async function pollForCreditBalanceIncrease(initialCreditCents: number) {
   const runId = Number(this._creditRefreshRunId || 0) + 1;
   this._creditRefreshRunId = runId;
 
@@ -845,7 +907,7 @@ const renderUsageCharts = (
   }
 };
 
-(SidePanelUI.prototype as any).startCreditCheckout = async function startCreditCheckout(packageCents: number) {
+sidePanelProto.startCreditCheckout = async function startCreditCheckout(packageCents: number) {
   this.setAccountUiBusy(true);
   try {
     const currentState = await getAuthState({ reconcileCredits: true });
@@ -870,7 +932,7 @@ const renderUsageCharts = (
   }
 };
 
-(SidePanelUI.prototype as any).openAccountBillingPortal = async function openAccountBillingPortal() {
+sidePanelProto.openAccountBillingPortal = async function openAccountBillingPortal() {
   this.setAccountUiBusy(true);
   try {
     const result = await manageSubscription();
@@ -889,7 +951,7 @@ const renderUsageCharts = (
   }
 };
 
-(SidePanelUI.prototype as any).signOutFromAccount = async function signOutFromAccount() {
+sidePanelProto.signOutFromAccount = async function signOutFromAccount() {
   this.setAccountUiBusy(true);
   try {
     this._creditRefreshRunId = Number(this._creditRefreshRunId || 0) + 1;
@@ -914,12 +976,13 @@ const renderUsageCharts = (
   }
 };
 
-(SidePanelUI.prototype as any).refreshAccountPanel = async function refreshAccountPanel({ silent = false } = {}) {
+sidePanelProto.refreshAccountPanel = async function refreshAccountPanel({ silent = false } = {}) {
   if (!CONVEX_DEPLOYMENT_URL) {
     setHidden(this.elements.accountAuthUnavailable, false);
     setHidden(this.elements.accountAuthSignedOut, true);
     setHidden(this.elements.accountAuthSignedIn, true);
     updateStatusCopy(this, 'Paid mode unavailable in this build. Use BYOK or set CONVEX_URL and rebuild.');
+    this.syncAccountAvatar?.();
     await this.refreshSetupFlowUi();
     return;
   }
@@ -933,6 +996,7 @@ const renderUsageCharts = (
       setHidden(this.elements.accountAuthSignedOut, false);
       setHidden(this.elements.accountAuthSignedIn, true);
       updateStatusCopy(this, 'Not signed in. Sign in and buy credits, or use BYOK in Setup.');
+      this.syncAccountAvatar?.();
       if (!silent) this.updateStatus('Account: signed out', 'warning');
       return;
     }
@@ -950,11 +1014,13 @@ const renderUsageCharts = (
     const monthSpendCents = Number(sub?.cost?.netSpendCents ?? 0);
     const recentTransactions = Array.isArray(sub?.recentTransactions) ? sub.recentTransactions : [];
     const lastDebitTx = recentTransactions.find(
-      (transaction) => String(transaction?.direction || '').toLowerCase() === 'debit' && transaction?.status !== 'denied',
+      (transaction) =>
+        String(transaction?.direction || '').toLowerCase() === 'debit' && transaction?.status !== 'denied',
     );
 
     if (this.elements.accountUserValue) this.elements.accountUserValue.textContent = userEmail;
-    if (this.elements.accountCreditBalance) this.elements.accountCreditBalance.textContent = formatCreditBalance(creditCents);
+    if (this.elements.accountCreditBalance)
+      this.elements.accountCreditBalance.textContent = formatCreditBalance(creditCents);
     if (this.elements.accountPlanValue) this.elements.accountPlanValue.textContent = planLabel;
     if (this.elements.accountUsageValue) this.elements.accountUsageValue.textContent = toUsageLabel(sub?.usage);
     if (this.elements.accountCostMonthValue)
@@ -972,7 +1038,8 @@ const renderUsageCharts = (
       if (stored[ACCOUNT_MODE_KEY] !== ACCOUNT_MODE_PAID) {
         await chrome.storage.local.set({ [ACCOUNT_MODE_KEY]: ACCOUNT_MODE_PAID });
       }
-      await this.ensureManagedProviderDefaults({ forceActivate: true });
+      // Only ensure the managed profile exists; don't force-switch if user picked another profile
+      await this.ensureManagedProviderDefaults();
     }
 
     // Show "Buy Credits" row always; hide legacy upgrade if user has credits or a subscription
@@ -985,6 +1052,7 @@ const renderUsageCharts = (
         : 'No credits. Buy credits or use BYOK to continue.';
     updateStatusCopy(this, statusMsg);
     if (!silent) this.updateStatus('Account refreshed', 'success');
+    this.syncAccountAvatar?.();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error ?? 'Failed to refresh account');
     updateStatusCopy(this, message);

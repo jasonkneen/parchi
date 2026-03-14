@@ -1,7 +1,10 @@
-import { isRuntimeMessage } from '../../../../shared/src/runtime-messages.js';
+import { isRuntimeMessage } from '@parchi/shared';
 import { createMessage, normalizeConversationHistory } from '../../../ai/message-schema.js';
 import type { Message } from '../../../ai/message-schema.js';
+import { appendTrace, pruneOldTraces } from '../chat/trace-store.js';
+import { recordUsage } from '../settings/usage-store.js';
 import { bindSidebarNavigation, setSidebarOpen } from './panel-navigation.js';
+import { clampContextHistory, clearReportImages, clearToolCallViews } from './panel-session-memory.js';
 
 const debounce = (fn: (...args: any[]) => void, ms: number) => {
   let timer: ReturnType<typeof setTimeout>;
@@ -11,6 +14,7 @@ const debounce = (fn: (...args: any[]) => void, ms: number) => {
   };
 };
 import { SidePanelUI } from './panel-ui.js';
+const sidePanelProto = SidePanelUI.prototype as SidePanelUI & Record<string, unknown>;
 
 const resolveTextAreaMaxHeight = (textarea: HTMLTextAreaElement, fallbackHeight: number): number => {
   const computedMaxHeight = Number.parseFloat(getComputedStyle(textarea).maxHeight);
@@ -28,33 +32,120 @@ const autoResizeTextArea = (textarea: HTMLTextAreaElement | null, maxHeight: num
   const nextHeight = Math.min(textarea.scrollHeight, resolvedMaxHeight);
   const clampedHeight = Math.max(nextHeight, resolvedMinHeight);
   textarea.style.height = `${clampedHeight}px`;
-  textarea.style.overflowY = textarea.scrollHeight > resolvedMaxHeight || clampedHeight >= resolvedMaxHeight ? 'auto' : 'hidden';
+  textarea.style.overflowY =
+    textarea.scrollHeight > resolvedMaxHeight || clampedHeight >= resolvedMaxHeight ? 'auto' : 'hidden';
 };
 
-(SidePanelUI.prototype as any).init = async function init() {
+const MAX_HISTORY_TURN_ENTRIES = 200;
+const MAX_TOOL_EVENTS_PER_TURN = 160;
+const MAX_TRACE_STRING_LENGTH = 4000;
+const MAX_TRACE_ARRAY_ITEMS = 40;
+const MAX_TRACE_OBJECT_KEYS = 60;
+
+const clampHistoryTurnMap = (self: any) => {
+  if (!self?.historyTurnMap || self.historyTurnMap.size <= MAX_HISTORY_TURN_ENTRIES) return;
+  const overflow = self.historyTurnMap.size - MAX_HISTORY_TURN_ENTRIES;
+  const keys = self.historyTurnMap.keys();
+  for (let i = 0; i < overflow; i += 1) {
+    const key = keys.next().value;
+    if (key === undefined) break;
+    self.historyTurnMap.delete(key);
+  }
+};
+
+const capTurnToolEvents = (turnEntry: any) => {
+  if (!turnEntry || !Array.isArray(turnEntry.toolEvents)) return;
+  if (turnEntry.toolEvents.length <= MAX_TOOL_EVENTS_PER_TURN) return;
+  turnEntry.toolEvents.splice(0, turnEntry.toolEvents.length - MAX_TOOL_EVENTS_PER_TURN);
+};
+
+const sanitizeTracePayload = (value: any, depth = 0): any => {
+  if (value == null) return value;
+  if (typeof value === 'string') {
+    if (value.startsWith('data:image/') || value.startsWith('data:application/octet-stream')) {
+      return '[omitted dataUrl]';
+    }
+    if (value.length <= MAX_TRACE_STRING_LENGTH) return value;
+    return `${value.slice(0, MAX_TRACE_STRING_LENGTH)}…`;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') return value;
+  if (typeof value === 'bigint') return Number(value);
+  if (typeof value === 'function') return undefined;
+  if (depth > 5) return '[truncated]';
+  if (Array.isArray(value)) {
+    const cap = Math.min(value.length, MAX_TRACE_ARRAY_ITEMS);
+    const out = new Array(cap);
+    for (let i = 0; i < cap; i += 1) {
+      out[i] = sanitizeTracePayload(value[i], depth + 1);
+    }
+    if (value.length > cap) {
+      out.push(`[+${value.length - cap} items truncated]`);
+    }
+    return out;
+  }
+  if (value instanceof Error) {
+    return {
+      name: value.name,
+      message: value.message,
+      stack: sanitizeTracePayload(value.stack || '', depth + 1),
+    };
+  }
+  if (typeof value === 'object') {
+    const out: Record<string, any> = {};
+    let keysSeen = 0;
+    for (const [key, raw] of Object.entries(value)) {
+      keysSeen += 1;
+      if (keysSeen > MAX_TRACE_OBJECT_KEYS) {
+        out.__truncatedKeys = `[+${Object.keys(value).length - MAX_TRACE_OBJECT_KEYS} keys truncated]`;
+        break;
+      }
+      const lower = key.toLowerCase();
+      if (lower.includes('dataurl') || lower === 'dataurl' || lower.endsWith('base64')) {
+        out[key] = '[omitted dataUrl]';
+        continue;
+      }
+      if (lower === 'frames' && Array.isArray(raw)) {
+        out[key] = { count: raw.length, omitted: true };
+        continue;
+      }
+      out[key] = sanitizeTracePayload(raw, depth + 1);
+    }
+    return out;
+  }
+  return String(value);
+};
+
+sidePanelProto.init = async function init() {
   try {
     this.connectLifecyclePort();
     this.setupEventListeners();
     this.setupPlanDrawer();
+    this.setupMissionControl();
     this.setupResizeObserver();
     setSidebarOpen(this.elements, false);
     await this.loadSettings();
     await this.initAccountPanel?.();
+    this.initProviderCardListeners?.();
+    this.populateProviderDropdown?.();
+    this.renderApiProviderGrid?.();
     await this.loadWorkflows();
     await this.loadHistoryList();
+    this.updateContextUsage?.();
     this.updateStatus('Ready', 'success');
+    this.syncAgentComposerState?.();
     this.updateModelDisplay();
     this.fetchAvailableModels();
     this.updateChatEmptyState?.();
     this.initMascotBubble?.();
-    this.initSessionTabsOrb?.();
+    // Prune old traces (>7 days) in background — fire and forget
+    pruneOldTraces().catch(() => {});
   } catch (error) {
     console.error('[Parchi] init() failed:', error);
     this.updateStatus('Initialization failed - check console', 'error');
   }
 };
 
-(SidePanelUI.prototype as any).connectLifecyclePort = function connectLifecyclePort() {
+sidePanelProto.connectLifecyclePort = function connectLifecyclePort() {
   if (this.lifecyclePort) return;
   try {
     const port = chrome.runtime.connect({ name: 'sidepanel-lifecycle' });
@@ -69,7 +160,7 @@ const autoResizeTextArea = (textarea: HTMLTextAreaElement | null, maxHeight: num
   }
 };
 
-(SidePanelUI.prototype as any).requestRunStop = function requestRunStop(note = 'Stopped') {
+sidePanelProto.requestRunStop = function requestRunStop(note = 'Stopped') {
   if (!this.lifecyclePort) {
     this.connectLifecyclePort?.();
   }
@@ -86,7 +177,7 @@ const autoResizeTextArea = (textarea: HTMLTextAreaElement | null, maxHeight: num
   } catch {}
 };
 
-(SidePanelUI.prototype as any).setupEventListeners = function setupEventListeners() {
+sidePanelProto.setupEventListeners = function setupEventListeners() {
   bindSidebarNavigation(this.elements, {
     onOpen: () => this.openSettingsPanel(),
     onClose: () => this.closeSidebar(),
@@ -96,7 +187,10 @@ const autoResizeTextArea = (textarea: HTMLTextAreaElement | null, maxHeight: num
     this.requestRunStop('Stopped (panel closed)');
   };
   window.addEventListener('pagehide', stopOnClose);
-  window.addEventListener('beforeunload', stopOnClose);
+  window.addEventListener('beforeunload', () => {
+    stopOnClose();
+    this.autoSaveSessionJsonl?.();
+  });
 
   this.elements.startNewSessionBtn?.addEventListener('click', () => this.startNewSession());
   this.elements.newSessionFab?.addEventListener('click', () => this.startNewSession());
@@ -111,39 +205,175 @@ const autoResizeTextArea = (textarea: HTMLTextAreaElement | null, maxHeight: num
     this.closeHistoryDrawer();
     this.startNewSession();
   });
-  this.elements.historySearchInput?.addEventListener('input', debounce(() => {
-    const query = (this.elements.historySearchInput?.value || '').trim();
-    this.filterHistoryList(query);
-  }, 150));
+  this.elements.historySearchInput?.addEventListener(
+    'input',
+    debounce(() => {
+      const query = (this.elements.historySearchInput?.value || '').trim();
+      this.filterHistoryList(query);
+    }, 150),
+  );
 
-  // Balance popover on status bar click
-  const statusBar = document.getElementById('statusBar');
+  const closeQuickActionsMenu = () => {
+    this.elements.quickActionsMenu?.classList.add('hidden');
+  };
+
+  const closeComposerMoreMenu = () => {};
+
+  // Composer tool buttons — direct click handlers with active state
+  const setToolActive = (btn: HTMLButtonElement | null, active: boolean) => {
+    btn?.classList.toggle('active', active);
+  };
+
+  this.elements.composerActionAttachFile?.addEventListener('click', () => {
+    setToolActive(this.elements.composerActionAttachFile, true);
+    this.elements.fileInput?.click();
+    setTimeout(() => setToolActive(this.elements.composerActionAttachFile, false), 200);
+  });
+  this.elements.composerActionRecordContext?.addEventListener('click', () => {
+    setToolActive(this.elements.composerActionRecordContext, true);
+    this.elements.recordBtn?.click();
+    setTimeout(() => setToolActive(this.elements.composerActionRecordContext, false), 200);
+  });
+  this.elements.composerActionSelectTabs?.addEventListener('click', () => {
+    setToolActive(this.elements.composerActionSelectTabs, true);
+    this.toggleTabSelector();
+    setTimeout(() => setToolActive(this.elements.composerActionSelectTabs, false), 200);
+  });
+  this.elements.composerActionExport?.addEventListener('click', () => {
+    setToolActive(this.elements.composerActionExport, true);
+    this.showExportMenu();
+    setTimeout(() => setToolActive(this.elements.composerActionExport, false), 200);
+  });
+
+  this.elements.quickActionsFab?.addEventListener('click', (event: Event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const menu = this.elements.quickActionsMenu as HTMLElement | null;
+    if (!menu) return;
+    menu.classList.toggle('hidden');
+    closeComposerMoreMenu();
+  });
+  this.elements.quickActionMissionControl?.addEventListener('click', () => {
+    closeQuickActionsMenu();
+    this.toggleMissionControl?.();
+  });
+  this.elements.quickActionSettings?.addEventListener('click', () => {
+    closeQuickActionsMenu();
+    this.openSettingsPanel?.();
+  });
+  this.elements.quickActionHistory?.addEventListener('click', () => {
+    closeQuickActionsMenu();
+    this.openHistoryDrawer();
+  });
+  this.elements.quickActionNewSession?.addEventListener('click', () => {
+    closeQuickActionsMenu();
+    this.startNewSession();
+  });
+  document.getElementById('quickActionResetProfiles')?.addEventListener('click', () => {
+    closeQuickActionsMenu();
+    this.resetAllProfiles?.();
+  });
+
+  // Balance popover on mascot click — status is shown inside mascot wrapper
+  const mascotCorner = document.getElementById('mascotCorner');
+  const mascotStatus = document.getElementById('mascotStatus');
   const balancePopover = document.getElementById('balancePopover');
   const balancePopoverClose = document.getElementById('balancePopoverClose');
-  if (statusBar && balancePopover) {
-    statusBar.addEventListener('click', () => this.toggleBalancePopover?.());
+
+  // Show/hide mascot status on hover
+  if (mascotCorner && mascotStatus) {
+    mascotCorner.addEventListener('mouseenter', () => {
+      mascotStatus.classList.remove('hidden');
+    });
+    mascotCorner.addEventListener('mouseleave', () => {
+      mascotStatus.classList.add('hidden');
+    });
+    mascotCorner.addEventListener('click', () => {
+      this.toggleBalancePopover?.();
+    });
+  }
+
+  if (balancePopover) {
     balancePopoverClose?.addEventListener('click', (e: Event) => {
       e.stopPropagation();
       balancePopover.classList.add('hidden');
     });
     // Close popover when clicking outside
     document.addEventListener('click', (e: Event) => {
-      if (!balancePopover.classList.contains('hidden') &&
-          !balancePopover.contains(e.target as Node) &&
-          !statusBar.contains(e.target as Node)) {
+      const target = e.target as Node;
+      const clickedMascot = mascotCorner?.contains(target) ?? false;
+      if (
+        !balancePopover.classList.contains('hidden') &&
+        !balancePopover.contains(target) &&
+        !clickedMascot
+      ) {
         balancePopover.classList.add('hidden');
       }
     });
   }
 
-  // Provider change
+  this.elements.contextInspectorBtn?.addEventListener('click', (event: Event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    void this.toggleContextInspectorPopover?.();
+  });
+
+  this.elements.contextInspectorCloseBtn?.addEventListener('click', (event: Event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    this.closeContextInspectorPopover?.();
+  });
+
+  this.elements.contextInspectorCompactBtn?.addEventListener('click', (event: Event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    this.closeContextInspectorPopover?.();
+    void this.requestManualContextCompaction?.();
+  });
+
+  document.addEventListener('click', (event: Event) => {
+    const popover = this.elements.contextInspectorPopover as HTMLElement | null;
+    const button = this.elements.contextInspectorBtn as HTMLElement | null;
+    const target = event.target as Node | null;
+    if (!popover || popover.classList.contains('hidden') || !target) return;
+    if (popover.contains(target)) return;
+    if (button?.contains(target)) return;
+    this.closeContextInspectorPopover?.();
+  });
+
+  document.addEventListener('click', (event: Event) => {
+    const target = event.target as Node | null;
+    if (!target) return;
+    const quickMenu = this.elements.quickActionsMenu as HTMLElement | null;
+    const quickButton = this.elements.quickActionsFab as HTMLElement | null;
+    if (quickMenu && !quickMenu.classList.contains('hidden')) {
+      if (!quickMenu.contains(target) && !quickButton?.contains(target)) closeQuickActionsMenu();
+    }
+  });
+
+  // Provider change — also refresh model catalog for setup tab
+  const debouncedSetupModelRefresh = debounce(() => this.refreshModelCatalog({ force: true }), 800);
   this.elements.provider?.addEventListener('change', () => {
     this.toggleCustomEndpoint();
     this.updateScreenshotToggleState();
+    debouncedSetupModelRefresh();
   });
 
-  // Custom endpoint validation
-  this.elements.customEndpoint?.addEventListener('input', () => this.validateCustomEndpoint());
+  // Custom endpoint validation + model refresh
+  this.elements.customEndpoint?.addEventListener('input', () => {
+    this.validateCustomEndpoint();
+    debouncedSetupModelRefresh();
+  });
+  this.elements.apiKey?.addEventListener('input', debouncedSetupModelRefresh);
+  this.elements.model?.addEventListener('input', () => {
+    if (!this.configs?.[this.currentConfig]) return;
+    this.configs[this.currentConfig] = {
+      ...this.configs[this.currentConfig],
+      model: String(this.elements.model?.value || '').trim(),
+    };
+    this.populateModelSelect?.();
+    this.updateModelDisplay?.();
+  });
 
   // Temperature slider
   this.elements.temperature?.addEventListener('input', () => {
@@ -163,38 +393,22 @@ const autoResizeTextArea = (textarea: HTMLTextAreaElement | null, maxHeight: num
   this.elements.deleteConfigBtn?.addEventListener('click', () => this.deleteConfig());
   this.elements.activeConfig?.addEventListener('change', () => this.switchConfig());
 
-  this.elements.settingsTabSetupBtn?.addEventListener('click', () => this.switchSettingsTab('setup'));
-  this.elements.settingsTabOauthBtn?.addEventListener('click', () => this.switchSettingsTab('oauth'));
+  this.elements.settingsTabProvidersBtn?.addEventListener('click', () => this.switchSettingsTab('providers'));
   this.elements.settingsTabModelBtn?.addEventListener('click', () => this.switchSettingsTab('model'));
-  this.elements.settingsTabBrowserBtn?.addEventListener('click', () => this.switchSettingsTab('browser'));
-  this.elements.settingsTabNetworkBtn?.addEventListener('click', () => this.switchSettingsTab('network'));
-  this.elements.settingsTabPromptBtn?.addEventListener('click', () => this.switchSettingsTab('prompt'));
-  this.elements.settingsTabProfilesBtn?.addEventListener('click', () => this.switchSettingsTab('profiles'));
-  this.elements.settingsTabUsageBtn?.addEventListener('click', () => this.switchSettingsTab('usage'));
+  this.elements.settingsTabGenerationBtn?.addEventListener('click', () => this.switchSettingsTab('generation'));
+  this.elements.settingsTabAdvancedBtn?.addEventListener('click', () => this.switchSettingsTab('advanced'));
+  this.elements.settingsOpenAccountBtn?.addEventListener('click', () => this.openAccountPanel?.());
+  this.elements.accountBackToSettingsBtn?.addEventListener('click', () => this.openSettingsPanel?.());
   document.getElementById('usageRefreshBtn')?.addEventListener('click', () => this.refreshUsageTab?.());
-  this.elements.createProfileBtn?.addEventListener('click', () => this.createProfileFromInput());
-  this.elements.agentGrid?.addEventListener('click', (event) => {
-    const deleteBtn = (event.target as HTMLElement | null)?.closest('.agent-card-delete') as HTMLElement | null;
-    if (deleteBtn) {
-      event.stopPropagation();
-      const profileName = deleteBtn.dataset.deleteProfile;
-      if (profileName) this.deleteProfileByName(profileName);
-      return;
-    }
-    const pill = (event.target as HTMLElement | null)?.closest('.role-pill');
-    if (pill) {
-      const role = (pill as HTMLElement).dataset.role;
-      const profile = (pill as HTMLElement).dataset.profile;
-      this.assignProfileRole(profile, role);
-      return;
-    }
-    const card = (event.target as HTMLElement | null)?.closest('.agent-card');
-    if (card) {
-      const profile = (card as HTMLElement).dataset.profile;
-      this.editProfile(profile);
-    }
+  document.getElementById('usageClearBtn')?.addEventListener('click', () => this.clearUsageData?.());
+  this.elements.teamProfileList?.addEventListener('change', (event: Event) => {
+    const input = event.target as HTMLInputElement | null;
+    const profileName = input?.dataset.teamProfile;
+    if (!profileName) return;
+    this.toggleAuxProfile(profileName);
+    void this.persistAllSettings?.({ silent: true });
+    this.renderTeamProfileList?.();
   });
-  this.elements.refreshProfilesBtn?.addEventListener('click', () => this.renderProfileGrid());
 
   // Screenshot + vision controls
   this.elements.enableScreenshots?.addEventListener('change', () => this.updateScreenshotToggleState());
@@ -205,6 +419,51 @@ const autoResizeTextArea = (textarea: HTMLTextAreaElement | null, maxHeight: num
   this.elements.sendScreenshotsAsImages?.addEventListener('change', () => this.updateScreenshotToggleState());
   this.elements.orchestratorToggle?.addEventListener('change', () => this.updatePromptSections?.());
   this.elements.orchestratorProfile?.addEventListener('change', () => this.updatePromptSections?.());
+
+  // Visible orchestrator controls sync with hidden ones
+  this.elements.orchestratorToggle?.addEventListener('change', () => {
+    const enabled = this.elements.orchestratorToggle?.checked === true;
+    const profileGroup = this.elements.orchestratorProfileSelectGroup as HTMLElement | null;
+    if (profileGroup) profileGroup.style.display = enabled ? '' : 'none';
+    this.updatePromptSections?.();
+    this.renderTeamProfileList?.();
+  });
+  this.elements.orchestratorProfile?.addEventListener('change', () => {
+    this.updatePromptSections?.();
+  });
+
+  // Auto-save sessions toggle
+  this.elements.autoSaveSession?.addEventListener('change', () => {
+    const enabled = this.elements.autoSaveSession?.value === 'true';
+    const folderGroup = document.getElementById('autoSaveFolderGroup');
+    if (folderGroup) folderGroup.style.display = enabled ? '' : 'none';
+  });
+  this.elements.autoSaveFolderBtn?.addEventListener('click', async () => {
+    try {
+      const handle = await (window as any).showDirectoryPicker({ mode: 'readwrite' });
+      this._autoSaveDirHandle = handle;
+      if (this.elements.autoSaveFolderLabel) this.elements.autoSaveFolderLabel.textContent = handle.name;
+    } catch {
+      // User cancelled or API unavailable
+    }
+  });
+
+  // Generation tab — live persistence
+  const genPersist = () => this.updateActiveConfigFromGenerationTab?.();
+  this.elements.genTemperature?.addEventListener('input', () => {
+    if (this.elements.genTemperatureValue)
+      this.elements.genTemperatureValue.textContent = Number(this.elements.genTemperature.value).toFixed(2);
+    genPersist();
+  });
+  for (const id of ['genMaxTokens', 'genContextLimit', 'genTimeout', 'genScreenshotQuality'] as const) {
+    this.elements[id]?.addEventListener('change', genPersist);
+  }
+  for (const id of [
+    'genEnableScreenshots', 'genSendScreenshots', 'genStreamResponses',
+    'genShowThinking', 'genAutoScroll', 'genConfirmActions', 'genSaveHistory',
+  ] as const) {
+    this.elements[id]?.addEventListener('change', genPersist);
+  }
 
   // Save settings
   this.elements.saveSettingsBtn?.addEventListener('click', () => {
@@ -260,15 +519,19 @@ export PARCHI_RELAY_PORT="${port}"`;
     void this.cancelSettings();
   });
 
-  this.elements.exportSettingsBtn?.addEventListener('click', () => this.exportSettings());
-  this.elements.importSettingsBtn?.addEventListener('click', () => {
-    this.elements.importSettingsInput?.click();
-  });
-  this.elements.importSettingsInput?.addEventListener('change', (event) => this.importSettings(event));
-
-  // Send message (or stop if running)
+  // Send message, queue, or stop depending on running state
   this.elements.sendBtn?.addEventListener('click', () => {
-    if (this.elements.composer?.classList.contains('running')) {
+    const isRunning = this.elements.composer?.classList.contains('running');
+    const hasText = this.elements.userInput?.value.trim();
+
+    if (isRunning && hasText) {
+      // Queue the message — it will send after the current turn completes
+      this.queuedMessage = this.elements.userInput.value.trim();
+      this.elements.userInput.value = '';
+      this.elements.userInput.style.height = '';
+      this.updateStatus('Message queued', 'active');
+    } else if (isRunning) {
+      // No text — stop the run
       this.requestRunStop('Stopped by user');
       this.stopWatchdog?.();
       this.stopThinkingTimer?.();
@@ -280,6 +543,7 @@ export PARCHI_RELAY_PORT="${port}"`;
       this.pendingToolCount = 0;
       this.isStreaming = false;
       this.activeToolName = null;
+      this.queuedMessage = null;
       this.updateActivityState();
       this.finishStreamingMessage();
       this.clearErrorBanner?.();
@@ -291,14 +555,51 @@ export PARCHI_RELAY_PORT="${port}"`;
   });
 
   // Enter to send (Shift+Enter for newline), workflow menu gets priority
+  // When running: Enter queues the message (same as clicking the send button)
   this.elements.userInput?.addEventListener('keydown', (event: KeyboardEvent) => {
     if (this.workflowMenuOpen && this.handleWorkflowKeydown(event)) {
       return;
     }
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
-      this.sendMessage();
+      const isRunning = this.elements.composer?.classList.contains('running');
+      const hasText = this.elements.userInput?.value.trim();
+
+      if (isRunning && hasText) {
+        // Queue the message — it will send after the current turn completes
+        this.queuedMessage = this.elements.userInput.value.trim();
+        this.elements.userInput.value = '';
+        this.elements.userInput.style.height = '';
+        this.updateStatus('Message queued', 'active');
+      } else if (isRunning) {
+        // No text — stop the run
+        this.requestRunStop('Stopped by user');
+        this.stopWatchdog?.();
+        this.stopThinkingTimer?.();
+        this.stopRunTimer?.();
+        this.elements.composer?.classList.remove('running');
+        this.pendingTurnDraft = null;
+        this.pendingRecordedContext = null;
+        this.hideRecordedContextBadge?.();
+        this.pendingToolCount = 0;
+        this.isStreaming = false;
+        this.activeToolName = null;
+        this.queuedMessage = null;
+        this.updateActivityState();
+        this.finishStreamingMessage();
+        this.clearErrorBanner?.();
+        this.insertStoppedDivider();
+        this.updateStatus('Stopped', 'warning');
+      } else {
+        this.sendMessage();
+      }
     }
+  });
+  this.elements.userInput?.addEventListener('paste', (event: ClipboardEvent) => {
+    const files = Array.from(event.clipboardData?.files || []) as File[];
+    if (!files.length) return;
+    event.preventDefault();
+    void this.ingestFilesIntoComposer?.(files, 'paste');
   });
 
   // Auto-expand textarea height as user types
@@ -370,79 +671,55 @@ export PARCHI_RELAY_PORT="${port}"`;
   this.elements.exportBtn?.addEventListener('click', () => this.showExportMenu());
 
   this.elements.chatMessages?.addEventListener('scroll', () => this.handleChatScroll());
+
+  // Delegated click: copy button inside code blocks
+  this.elements.chatMessages?.addEventListener('click', (e: Event) => {
+    const btn = (e.target as HTMLElement).closest('.code-copy-btn') as HTMLButtonElement | null;
+    if (!btn) return;
+    const wrap = btn.closest('.code-block-wrap');
+    const code = wrap?.querySelector('code');
+    if (!code) return;
+    navigator.clipboard.writeText(code.textContent || '').then(() => {
+      btn.classList.add('copied');
+      setTimeout(() => btn.classList.remove('copied'), 2000);
+    });
+  });
   this.elements.scrollToLatestBtn?.addEventListener('click', () => this.scrollToBottom({ force: true }));
 
   // Stop/reset is now handled by the send button above
 
   // Profile editor controls
   this.elements.profileEditorProvider?.addEventListener('change', () => {
+    // Clear model fields whenever the provider changes so a stale model from a
+    // previously-cloned or previously-edited profile never gets saved against
+    // the wrong provider (e.g. gpt-4o saved under anthropic).
+    const modelInput = this.elements.profileEditorModelInput as HTMLInputElement | null;
+    const modelSelect = this.elements.profileEditorModel as HTMLSelectElement | null;
+    if (modelInput) modelInput.value = '';
+    if (modelSelect) modelSelect.value = '';
     this.toggleProfileEditorEndpoint();
     this.refreshModelCatalogForProfileEditor?.();
+  });
+
+  // Sync model text input to hidden select
+  this.elements.profileEditorModelInput?.addEventListener('input', () => {
+    const val = (this.elements.profileEditorModelInput?.value || '').trim();
+    const select = this.elements.profileEditorModel as HTMLSelectElement | null;
+    if (select) {
+      if (val && !Array.from(select.options).some((o: HTMLOptionElement) => o.value === val)) {
+        const opt = document.createElement('option');
+        opt.value = val;
+        opt.textContent = val;
+        select.insertBefore(opt, select.options[1] || null);
+      }
+      select.value = val;
+    }
   });
 
   // Also refetch models when endpoint or API key changes (debounced)
   const debouncedModelRefresh = debounce(() => this.refreshModelCatalogForProfileEditor?.(), 800);
   this.elements.profileEditorEndpoint?.addEventListener('input', debouncedModelRefresh);
   this.elements.profileEditorApiKey?.addEventListener('input', debouncedModelRefresh);
-
-  // Model picker: open on focus/click of model input
-  this.elements.profileEditorModel?.addEventListener('focus', () => this.showModelPicker?.());
-  this.elements.profileEditorModel?.addEventListener('click', () => this.showModelPicker?.());
-
-  // Model picker: filter as user types in filter input
-  document.getElementById('modelPickerFilter')?.addEventListener('input', (e: Event) => {
-    const value = (e.target as HTMLInputElement).value;
-    this.renderModelPickerList?.(value);
-  });
-
-  // Model picker: select on click
-  document.getElementById('modelPickerList')?.addEventListener('click', (e: Event) => {
-    const item = (e.target as HTMLElement).closest('.model-picker-item') as HTMLElement | null;
-    if (!item?.dataset.model) return;
-    if (this.elements.profileEditorModel) {
-      this.elements.profileEditorModel.value = item.dataset.model;
-    }
-    this.hideModelPicker?.();
-  });
-
-  // Model picker: close on outside click
-  document.addEventListener('mousedown', (e: MouseEvent) => {
-    const dropdown = document.getElementById('modelPickerDropdown');
-    if (!dropdown || dropdown.classList.contains('hidden')) return;
-    const pickerGroup = (e.target as HTMLElement)?.closest('.model-picker-group');
-    if (!pickerGroup) this.hideModelPicker?.();
-  });
-
-  // Model picker: keyboard navigation in filter
-  document.getElementById('modelPickerFilter')?.addEventListener('keydown', (e: KeyboardEvent) => {
-    if (e.key === 'Escape') {
-      this.hideModelPicker?.();
-      this.elements.profileEditorModel?.focus();
-      return;
-    }
-    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-      e.preventDefault();
-      const list = document.getElementById('modelPickerList');
-      if (!list) return;
-      const items = list.querySelectorAll('.model-picker-item');
-      if (!items.length) return;
-      const focused = list.querySelector('.model-picker-item.focused') as HTMLElement | null;
-      let idx = focused ? Array.from(items).indexOf(focused) : -1;
-      if (focused) focused.classList.remove('focused');
-      idx = e.key === 'ArrowDown' ? Math.min(idx + 1, items.length - 1) : Math.max(idx - 1, 0);
-      const next = items[idx] as HTMLElement;
-      next.classList.add('focused');
-      next.scrollIntoView({ block: 'nearest' });
-    }
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      const focused = document.querySelector('#modelPickerList .model-picker-item.focused') as HTMLElement | null;
-      if (focused?.dataset.model && this.elements.profileEditorModel) {
-        this.elements.profileEditorModel.value = focused.dataset.model;
-        this.hideModelPicker?.();
-      }
-    }
-  });
 
   this.elements.profileEditorHeaders?.addEventListener('input', () => this.validateProfileEditorHeaders());
   this.elements.profileEditorTemperature?.addEventListener('input', () => {
@@ -451,6 +728,9 @@ export PARCHI_RELAY_PORT="${port}"`;
     }
   });
   this.elements.saveProfileBtn?.addEventListener('click', () => this.saveProfileEdits());
+  this.elements.profileEditorCancelBtn?.addEventListener('click', () =>
+    this.editProfile(this.profileEditorTarget || this.currentConfig, true),
+  );
   this.elements.refreshProfileJsonBtn?.addEventListener('click', () => this.refreshProfileJsonEditor());
   this.elements.copyProfileJsonBtn?.addEventListener('click', () => this.copyProfileJsonEditor());
   this.elements.applyProfileJsonBtn?.addEventListener('click', () => this.applyProfileJsonEditor());
@@ -482,7 +762,7 @@ export PARCHI_RELAY_PORT="${port}"`;
   });
 };
 
-(SidePanelUI.prototype as any).setupResizeObserver = function setupResizeObserver() {
+sidePanelProto.setupResizeObserver = function setupResizeObserver() {
   if (!this.elements.chatMessages || typeof ResizeObserver === 'undefined') return;
   this.chatResizeObserver = new ResizeObserver(() => {
     if (this.shouldAutoScroll() && this.isNearBottom) {
@@ -492,7 +772,16 @@ export PARCHI_RELAY_PORT="${port}"`;
   this.chatResizeObserver.observe(this.elements.chatMessages);
 };
 
-(SidePanelUI.prototype as any).startWatchdog = function startWatchdog() {
+sidePanelProto.flushQueuedMessage = function flushQueuedMessage() {
+  if (!this.queuedMessage) return;
+  const msg = this.queuedMessage;
+  this.queuedMessage = null;
+  // Stuff the queued text into the input and send
+  this.elements.userInput.value = msg;
+  this.sendMessage();
+};
+
+sidePanelProto.startWatchdog = function startWatchdog() {
   this.stopWatchdog();
   this._lastRuntimeMessageAt = Date.now();
   this._watchdogTimerId = setInterval(() => {
@@ -508,14 +797,14 @@ export PARCHI_RELAY_PORT="${port}"`;
   }, 15_000);
 };
 
-(SidePanelUI.prototype as any).stopWatchdog = function stopWatchdog() {
+sidePanelProto.stopWatchdog = function stopWatchdog() {
   if (this._watchdogTimerId != null) {
     clearInterval(this._watchdogTimerId);
     this._watchdogTimerId = null;
   }
 };
 
-(SidePanelUI.prototype as any).insertStoppedDivider = function insertStoppedDivider() {
+sidePanelProto.insertStoppedDivider = function insertStoppedDivider() {
   const el = document.createElement('div');
   el.className = 'stopped-divider';
   el.innerHTML = '<span>Stopped</span>';
@@ -523,7 +812,24 @@ export PARCHI_RELAY_PORT="${port}"`;
   this.scrollToBottom();
 };
 
-(SidePanelUI.prototype as any).recoverFromStuckState = function recoverFromStuckState() {
+sidePanelProto.recoverFromStuckState = function recoverFromStuckState() {
+  if (!this.lifecyclePort) {
+    this.connectLifecyclePort?.();
+  }
+  const backgroundReachable = Boolean(this.lifecyclePort);
+  this._lastRuntimeMessageAt = Date.now();
+
+  if (backgroundReachable) {
+    this.showErrorBanner('No runtime updates for 90s. The model may still be working.', {
+      category: 'timeout',
+      action: 'Wait, or press Stop if the run is hung.',
+    });
+    if (!this.thinkingTimerId) {
+      this.updateStatus('Waiting on model…', 'active');
+    }
+    return;
+  }
+
   this.stopWatchdog();
   this.stopThinkingTimer?.();
   this.stopRunTimer?.();
@@ -534,17 +840,21 @@ export PARCHI_RELAY_PORT="${port}"`;
   this.pendingToolCount = 0;
   this.isStreaming = false;
   this.activeToolName = null;
+  this.queuedMessage = null;
   this.updateActivityState();
   this.finishStreamingMessage();
-  this.showErrorBanner('Connection lost — the background service may have restarted. You can send a new message.', {
+  this.showErrorBanner('Run interrupted — the background service is unavailable. You can send the message again.', {
     category: 'timeout',
     action: 'Try sending your message again.',
   });
-  this.updateStatus('Disconnected', 'error');
+  this.updateStatus('Interrupted', 'warning');
 };
 
-(SidePanelUI.prototype as any).handleRuntimeMessage = function handleRuntimeMessage(message: any) {
+sidePanelProto.handleRuntimeMessage = function handleRuntimeMessage(message: any) {
   this._lastRuntimeMessageAt = Date.now();
+  if (message?.agentId && message.agentId !== 'main' && this.handleSubagentRuntimeMessage?.(message)) {
+    return;
+  }
   // Runtime messages are broadcast to all extension views. Only render events
   // that belong to the currently active session to avoid spilling output across
   // New Chat / history-loaded sessions.
@@ -580,8 +890,39 @@ export PARCHI_RELAY_PORT="${port}"`;
     return;
   }
 
+  if (message.type === 'user_run_start') {
+    this.streamingUsageEstimatedTokens = 0;
+    this.streamingUsageEstimatedTokensApplied = 0;
+    return;
+  }
+
   if (message.type === 'run_status') {
     const phase = typeof message.phase === 'string' ? message.phase : '';
+    const isCompactionStage = String((message as any).stage || '') === 'compaction';
+
+    if (isCompactionStage) {
+      if (phase === 'planning' || phase === 'executing' || phase === 'finalizing') {
+        this.setContextCompactionState?.({
+          inProgress: true,
+          lastResult: null,
+          lastMessage: message.note || null,
+        });
+      } else if (phase === 'completed') {
+        this.setContextCompactionState?.({
+          inProgress: false,
+          lastMessage: message.note || null,
+          lastCompletedAt: Date.now(),
+        });
+      } else if (phase === 'failed' || phase === 'stopped') {
+        this.setContextCompactionState?.({
+          inProgress: false,
+          lastResult: phase === 'stopped' ? 'skipped' : 'error',
+          lastMessage: message.note || null,
+          lastCompletedAt: Date.now(),
+        });
+      }
+    }
+
     if (phase === 'stopped' || phase === 'failed' || phase === 'completed') {
       this.stopWatchdog?.();
       this.stopThinkingTimer?.();
@@ -593,31 +934,163 @@ export PARCHI_RELAY_PORT="${port}"`;
       this.pendingToolCount = 0;
       this.isStreaming = false;
       this.activeToolName = null;
+      this.streamingUsageEstimatedTokens = 0;
+      this.streamingUsageEstimatedTokensApplied = 0;
       this.updateActivityState();
       this.finishStreamingMessage();
     }
 
     if (phase === 'stopped') {
       this.updateStatus(message.note || 'Stopped', 'warning');
+      this.flushQueuedMessage?.();
     } else if (phase === 'failed') {
       this.updateStatus(message.note || 'Failed', 'error');
+      this.flushQueuedMessage?.();
     } else if (phase === 'completed') {
       this.updateStatus(message.note || 'Ready', 'success');
+      // Note: flushQueuedMessage is called from displayAssistantMessage for completed runs
     } else if (phase === 'planning' || phase === 'executing' || phase === 'finalizing') {
       // Surface non-terminal phases with retry counts
       const phaseLabel = phase.charAt(0).toUpperCase() + phase.slice(1);
-      const retryInfo = message.attempts && message.maxRetries
-        ? (() => {
-            const parts: string[] = [];
-            if (message.attempts.api > 0) parts.push(`api ${message.attempts.api}/${message.maxRetries.api}`);
-            if (message.attempts.tool > 0) parts.push(`tool ${message.attempts.tool}/${message.maxRetries.tool}`);
-            return parts.length ? ` (retries: ${parts.join(', ')})` : '';
-          })()
-        : '';
-      this.updateStatus(`${phaseLabel}${retryInfo}`, 'active');
+      const retryInfo =
+        message.attempts && message.maxRetries
+          ? (() => {
+              const parts: string[] = [];
+              if (message.attempts.api > 0) parts.push(`api ${message.attempts.api}/${message.maxRetries.api}`);
+              if (message.attempts.tool > 0) parts.push(`tool ${message.attempts.tool}/${message.maxRetries.tool}`);
+              return parts.length ? ` (retries: ${parts.join(', ')})` : '';
+            })()
+          : '';
+      this.updateStatus(message.note || `${phaseLabel}${retryInfo}`, 'active');
     } else if (phase) {
       this.updateStatus(message.note || phase, 'active');
     }
+    return;
+  }
+
+  if (message.type === 'token_trace') {
+    const action = typeof message.action === 'string' ? message.action : '';
+    const reason = typeof message.reason === 'string' ? message.reason : '';
+    const note = typeof message.note === 'string' ? message.note : '';
+    const before = sanitizeTracePayload((message as any).before || null);
+    const after = sanitizeTracePayload((message as any).after || null);
+    const details = sanitizeTracePayload((message as any).details || null);
+
+    appendTrace({
+      sessionId: this.sessionId,
+      ts: Date.now(),
+      kind: 'token_trace',
+      action,
+      reason,
+      note,
+      before,
+      after,
+      details,
+    });
+
+    const beforeSnapshot =
+      before && typeof before === 'object' ? (before as Record<string, unknown>) : ({} as Record<string, unknown>);
+    const afterSnapshot =
+      after && typeof after === 'object' ? (after as Record<string, unknown>) : ({} as Record<string, unknown>);
+
+    const nextSessionInput = Number(afterSnapshot.sessionInputTokens);
+    const nextSessionOutput = Number(afterSnapshot.sessionOutputTokens);
+    const nextSessionTotal = Number(afterSnapshot.sessionTotalTokens);
+
+    if (Number.isFinite(nextSessionInput) && Number.isFinite(nextSessionOutput) && Number.isFinite(nextSessionTotal)) {
+      const previousSessionInput = Number(beforeSnapshot.sessionInputTokens || 0);
+      const previousSessionOutput = Number(beforeSnapshot.sessionOutputTokens || 0);
+      const previousSessionTotal = Number(beforeSnapshot.sessionTotalTokens || 0);
+
+      this.sessionTokenTotals = {
+        inputTokens: Math.max(0, nextSessionInput),
+        outputTokens: Math.max(0, nextSessionOutput),
+        totalTokens: Math.max(0, nextSessionTotal),
+      };
+      this.sessionTokensUsed = Math.max(0, Number(afterSnapshot.contextApproxTokens || nextSessionInput));
+      this.lastUsage = {
+        inputTokens: Math.max(0, nextSessionInput - previousSessionInput),
+        outputTokens: Math.max(0, nextSessionOutput - previousSessionOutput),
+        totalTokens: Math.max(0, nextSessionTotal - previousSessionTotal),
+      };
+      this.updateActivityState();
+    }
+
+    const nextContextApprox = Number(afterSnapshot.contextApproxTokens);
+    if (Number.isFinite(nextContextApprox) && nextContextApprox > 0) {
+      this.updateContextUsage(nextContextApprox);
+    }
+
+    return;
+  }
+
+  if (message.type === 'compaction_event') {
+    const stage = typeof message.stage === 'string' ? message.stage : '';
+    const note = typeof message.note === 'string' ? message.note : '';
+    const source = typeof message.source === 'string' ? message.source : 'auto';
+    const details =
+      message.details && typeof message.details === 'object'
+        ? (sanitizeTracePayload(message.details) as Record<string, unknown>)
+        : {};
+
+    this.setContextCompactionState?.({
+      lastEvent: {
+        stage,
+        note: note || null,
+        source,
+        details,
+        timestamp: Date.now(),
+      },
+    });
+
+    if (stage === 'start' || stage === 'summary_request') {
+      this.setContextCompactionState?.({
+        inProgress: true,
+        lastResult: null,
+        lastMessage: note || 'Compaction in progress…',
+      });
+      this.updateStatus(note || 'Compacting context…', 'active');
+    } else if (stage === 'summary_result') {
+      this.updateStatus(note || 'Compaction summary generated.', 'active');
+    } else if (stage === 'provider_detected') {
+      this.setContextCompactionState?.({
+        inProgress: false,
+        lastMessage: note || 'Provider compaction detected.',
+        lastCompletedAt: Date.now(),
+      });
+      this.updateStatus(note || 'Provider compaction detected.', 'warning');
+    } else if (stage === 'skipped') {
+      this.setContextCompactionState?.({
+        inProgress: false,
+        lastResult: 'skipped',
+        lastMessage: note || 'Compaction skipped',
+        lastCompletedAt: Date.now(),
+      });
+      this.updateStatus(note || 'Compaction skipped', 'warning');
+    } else if (stage === 'failed') {
+      this.setContextCompactionState?.({
+        inProgress: false,
+        lastResult: 'error',
+        lastMessage: note || 'Compaction failed',
+        lastCompletedAt: Date.now(),
+      });
+      this.updateStatus(note || 'Compaction failed', 'error');
+    }
+
+    void appendTrace({
+      sessionId: this.sessionId,
+      ts: Date.now(),
+      kind: 'compaction_event',
+      stage,
+      source,
+      note,
+      details,
+    }).finally(() => {
+      if (this.isContextInspectorPopoverOpen?.()) {
+        void this.refreshContextInspectorLog?.();
+      }
+    });
+
     return;
   }
 
@@ -639,6 +1112,14 @@ export PARCHI_RELAY_PORT="${port}"`;
         } as any);
       entry.plan = message.plan;
       this.historyTurnMap.set(turnId, entry);
+
+      // Persist plan trace to IndexedDB
+      appendTrace({
+        sessionId: this.sessionId,
+        ts: Date.now(),
+        kind: 'plan_update',
+        plan: message.plan,
+      });
     }
 
     return;
@@ -654,16 +1135,6 @@ export PARCHI_RELAY_PORT="${port}"`;
     this.clearErrorBanner();
     this.updateActivityState();
     this.activeToolName = message.tool || null;
-    // Track which tab the model is interacting with.
-    // Many browser tools resolve tabId internally via resolveTabId() so args.tabId
-    // may be missing. Fall back to the session's active tab for known browser tools.
-    const browserTools = ['navigate', 'openTab', 'click', 'type', 'pressKey', 'scroll',
-      'getContent', 'screenshot', 'switchTab', 'focusTab', 'closeTab', 'watchVideo', 'getVideoInfo'];
-    let toolTabId = typeof message.args?.tabId === 'number' ? message.args.tabId : null;
-    if (!toolTabId && browserTools.includes(message.tool)) {
-      toolTabId = this.sessionTabsState?.activeTabId ?? null;
-    }
-    this.setInteractingTab(toolTabId);
     if (!this.streamingState) {
       this.startStreamingMessage();
     }
@@ -689,12 +1160,26 @@ export PARCHI_RELAY_PORT="${port}"`;
         type: 'tool_execution_start',
         tool: message.tool,
         id: (message as any).id,
-        args: (message as any).args,
+        args: sanitizeTracePayload((message as any).args),
         stepIndex: (message as any).stepIndex,
         stepTitle: (message as any).stepTitle,
         timestamp: (message as any).timestamp,
       });
+      capTurnToolEvents(entry);
       this.historyTurnMap.set(turnId, entry);
+      clampHistoryTurnMap(this);
+
+      // Persist full trace to IndexedDB
+      appendTrace({
+        sessionId: this.sessionId,
+        ts: Date.now(),
+        kind: 'tool_start',
+        tool: message.tool,
+        toolId: (message as any).id,
+        args: sanitizeTracePayload((message as any).args),
+        stepIndex: (message as any).stepIndex,
+        stepTitle: (message as any).stepTitle,
+      });
     }
 
     this.displayToolExecution(message.tool, message.args, null, message.id);
@@ -704,9 +1189,6 @@ export PARCHI_RELAY_PORT="${port}"`;
     this.pendingToolCount = Math.max(0, this.pendingToolCount - 1);
     this.updateActivityState();
     this.activeToolName = null;
-    if (this.pendingToolCount === 0) {
-      this.setInteractingTab(null);
-    }
     if (!this.streamingState) {
       this.startStreamingMessage();
     }
@@ -732,13 +1214,28 @@ export PARCHI_RELAY_PORT="${port}"`;
         type: 'tool_execution_result',
         tool: message.tool,
         id: (message as any).id,
-        args: (message as any).args,
-        result: (message as any).result,
+        args: sanitizeTracePayload((message as any).args),
+        result: sanitizeTracePayload((message as any).result),
         stepIndex: (message as any).stepIndex,
         stepTitle: (message as any).stepTitle,
         timestamp: (message as any).timestamp,
       });
+      capTurnToolEvents(entry);
       this.historyTurnMap.set(turnId, entry);
+      clampHistoryTurnMap(this);
+
+      // Persist full trace to IndexedDB
+      appendTrace({
+        sessionId: this.sessionId,
+        ts: Date.now(),
+        kind: 'tool_result',
+        tool: message.tool,
+        toolId: (message as any).id,
+        args: sanitizeTracePayload((message as any).args),
+        result: sanitizeTracePayload((message as any).result),
+        stepIndex: (message as any).stepIndex,
+        stepTitle: (message as any).stepTitle,
+      });
     }
 
     this.displayToolExecution(message.tool, message.args, message.result, message.id);
@@ -766,20 +1263,34 @@ export PARCHI_RELAY_PORT="${port}"`;
         usage: (message as any).usage || null,
       };
       this.historyTurnMap.set(turnId, entry);
-    }
+      clampHistoryTurnMap(this);
 
-    // Cap historyTurnMap to prevent unbounded memory growth
-    if (this.historyTurnMap.size > 200) {
-      const iter = this.historyTurnMap.keys();
-      const excess = this.historyTurnMap.size - 200;
-      for (let i = 0; i < excess; i++) {
-        const key = iter.next().value;
-        if (key !== undefined) this.historyTurnMap.delete(key);
-      }
+      // Persist full trace to IndexedDB
+      appendTrace({
+        sessionId: this.sessionId,
+        ts: Date.now(),
+        kind: 'assistant_final',
+        content: message.content,
+        thinking: message.thinking || null,
+        model: message.model || null,
+        usage: (message as any).usage || null,
+      });
     }
 
     this.displayAssistantMessage(message.content, message.thinking, message.usage, message.model);
     this.appendContextMessages(message.responseMessages, message.content, message.thinking);
+
+    // Record usage to persistent local store
+    if (message.usage && (message.usage.inputTokens || message.usage.outputTokens)) {
+      const activeConfig = this.configs?.[this.currentConfig] || {};
+      const usageModel = message.model || activeConfig.model || 'unknown';
+      const usageProvider = activeConfig.provider || 'unknown';
+      recordUsage(usageModel, usageProvider, {
+        inputTokens: message.usage.inputTokens || 0,
+        outputTokens: message.usage.outputTokens || 0,
+      }).catch((err) => console.warn('[Parchi] recordUsage failed:', err));
+    }
+
     if (message.usage?.inputTokens) {
       this.updateContextUsage(message.usage.inputTokens);
     } else if (message.contextUsage?.approxTokens) {
@@ -811,13 +1322,24 @@ export PARCHI_RELAY_PORT="${port}"`;
     this.pendingToolCount = 0;
     this.isStreaming = false;
     this.activeToolName = null;
+    this.streamingUsageEstimatedTokens = 0;
+    this.streamingUsageEstimatedTokensApplied = 0;
     this.updateActivityState();
+    this.nullifyFinalizedToolData?.();
     this.finishStreamingMessage();
     this.showErrorBanner(message.message, {
       category: (message as any).errorCategory,
       action: (message as any).action,
       recoverable: (message as any).recoverable,
     });
+    if (String((message as any).stage || '') === 'compaction') {
+      this.setContextCompactionState?.({
+        inProgress: false,
+        lastResult: 'error',
+        lastMessage: message.message || 'Compaction failed',
+        lastCompletedAt: Date.now(),
+      });
+    }
     void this.setParchiRuntimeHealth?.({
       level: 'error',
       summary: String(message.message || 'Paid runtime failed.'),
@@ -825,10 +1347,23 @@ export PARCHI_RELAY_PORT="${port}"`;
       category: String((message as any).errorCategory || ''),
     });
     this.updateStatus('Error', 'error');
+    this.flushQueuedMessage?.();
     return;
   }
   if (message.type === 'run_warning') {
-    this.showErrorBanner(message.message);
+    const isCompactionWarning = String((message as any).stage || '') === 'compaction';
+    if (!isCompactionWarning) {
+      this.showErrorBanner(message.message);
+    }
+    if (isCompactionWarning) {
+      this.setContextCompactionState?.({
+        inProgress: false,
+        lastResult: 'skipped',
+        lastMessage: message.message || 'No compaction applied',
+        lastCompletedAt: Date.now(),
+      });
+      this.updateStatus(message.message || 'Compaction skipped', 'warning');
+    }
     const warningText = String(message.message || '');
     if (warningText) {
       const lower = warningText.toLowerCase();
@@ -841,10 +1376,7 @@ export PARCHI_RELAY_PORT="${port}"`;
     }
     return;
   }
-  if (message.type === 'session_tabs_update') {
-    this.handleSessionTabsUpdate(message);
-    return;
-  }
+
   if (message.type === 'report_image_captured') {
     this.recordReportImage?.(message.image);
     this.updateReportImageSelection?.(message.selectedImageIds || []);
@@ -871,7 +1403,7 @@ export PARCHI_RELAY_PORT="${port}"`;
   }
 };
 
-(SidePanelUI.prototype as any).appendContextMessages = function appendContextMessages(
+sidePanelProto.appendContextMessages = function appendContextMessages(
   responseMessages?: Array<Record<string, unknown>>,
   fallbackContent?: string,
   fallbackThinking?: string | null,
@@ -884,21 +1416,32 @@ export PARCHI_RELAY_PORT="${port}"`;
     });
     if (assistantEntry) {
       this.contextHistory.push(assistantEntry);
+      clampContextHistory(this.contextHistory);
     }
     return;
   }
   const normalized = normalizeConversationHistory(responseMessages as unknown as Message[]);
   this.contextHistory.push(...normalized);
+  clampContextHistory(this.contextHistory);
 };
 
-(SidePanelUI.prototype as any).handleContextCompaction = function handleContextCompaction(message: any) {
+sidePanelProto.handleContextCompaction = function handleContextCompaction(message: any) {
   const trimmedCount = Number(message.trimmedCount || 0);
   const preservedCount = Number(message.preservedCount || 0);
-  const percent = typeof message.contextUsage?.percent === 'number' ? Math.max(0, Math.min(100, Math.round(message.contextUsage.percent))) : null;
+  const source = String(message.source || 'auto');
+  const percent =
+    typeof message.contextUsage?.percent === 'number'
+      ? Math.max(0, Math.min(100, Math.round(message.contextUsage.percent)))
+      : null;
+  const beforePercent =
+    typeof message.beforeContextUsage?.percent === 'number'
+      ? Math.max(0, Math.min(100, Math.round(message.beforeContextUsage.percent)))
+      : null;
   const parts = [
     trimmedCount > 0 ? `${trimmedCount} summarized` : 'Context compacted',
     preservedCount > 0 ? `${preservedCount} preserved` : null,
-    percent !== null ? `${percent}% after compaction` : null,
+    beforePercent !== null && percent !== null ? `${beforePercent}% → ${percent}%` : null,
+    beforePercent === null && percent !== null ? `${percent}% after compaction` : null,
   ].filter(Boolean);
   if (parts.length > 0) {
     this.updateStatus(`Context compacted: ${parts.join(', ')}`, 'success');
@@ -906,7 +1449,19 @@ export PARCHI_RELAY_PORT="${port}"`;
 
   const normalized = normalizeConversationHistory(message.contextMessages as unknown as Message[]);
   this.contextHistory = normalized;
+  clampContextHistory(this.contextHistory);
   this.sessionId = message.newSessionId || this.sessionId;
+  if (message.startFreshSession === true) {
+    this.displayHistory = [];
+    this.elements.chatMessages.innerHTML = '';
+    this.lastChatTurn = null;
+    this.pendingTurnDraft = null;
+    this.historyTurnMap.clear();
+    this.currentPlan = null;
+    this.hidePlanDrawer?.();
+    clearToolCallViews(this.toolCallViews);
+    clearReportImages(this.reportImages, this.reportImageOrder, this.selectedReportImageIds);
+  }
 
   const summaryText = message.summary || 'Context compacted.';
   const summaryEntry = createMessage({
@@ -923,7 +1478,64 @@ export PARCHI_RELAY_PORT="${port}"`;
     this.displaySummaryMessage(summaryEntry);
   }
 
-  if (message.contextUsage?.approxTokens) {
+  if (typeof message.contextUsage?.approxTokens === 'number') {
     this.updateContextUsage(message.contextUsage.approxTokens);
+  }
+
+  this.setContextCompactionState?.({
+    inProgress: false,
+    lastResult: 'success',
+    lastMessage: parts.join(', '),
+    lastTrimmedCount: trimmedCount,
+    lastPreservedCount: preservedCount,
+    lastSource: source,
+    lastCompactedAt: Date.now(),
+    lastCompletedAt: Date.now(),
+    lastBeforePercent: beforePercent,
+    lastAfterPercent: percent,
+    lastMetrics:
+      message.compactionMetrics && typeof message.compactionMetrics === 'object'
+        ? (sanitizeTracePayload(message.compactionMetrics) as Record<string, unknown>)
+        : null,
+  });
+
+  void appendTrace({
+    sessionId: this.sessionId,
+    ts: Date.now(),
+    kind: 'compaction_event',
+    stage: 'applied',
+    source,
+    note: parts.join(', '),
+    details: sanitizeTracePayload({
+      trimmedCount,
+      preservedCount,
+      beforeContextUsage: message.beforeContextUsage,
+      contextUsage: message.contextUsage,
+      metrics: message.compactionMetrics,
+    }),
+  }).finally(() => {
+    if (this.isContextInspectorPopoverOpen?.()) {
+      void this.refreshContextInspectorLog?.();
+    }
+  });
+
+  // Trigger compaction sweep animation on the context bar
+  const bar = document.getElementById('contextBar');
+  if (bar) {
+    bar.classList.remove('compacting');
+    // Force reflow so re-adding the class restarts the animation
+    void bar.offsetWidth;
+    bar.classList.add('compacting');
+    bar.addEventListener('animationend', () => bar.classList.remove('compacting'), { once: true });
+  }
+
+  // Auto-continue: if compaction was triggered automatically at end of turn,
+  // send a continuation prompt so the model resumes with the compacted context.
+  if (source === 'auto' && !this.elements.composer?.classList.contains('running')) {
+    setTimeout(() => {
+      this.elements.userInput.value =
+        'Continue where you left off. The context was compacted — use the summary above as your source of truth.';
+      this.sendMessage();
+    }, 400);
   }
 };
