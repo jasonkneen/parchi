@@ -1,4 +1,4 @@
-import { dedupeThinking } from '../../../ai/message-utils.js';
+import { dedupeThinking } from '../../../ai/messages/utils.js';
 import { clearToolCallViews } from '../core/panel-session-memory.js';
 import { sidePanelProto } from './panel-tools-shared.js';
 
@@ -115,13 +115,13 @@ sidePanelProto.updateMascotEyeState = function updateMascotEyeState() {
   const isRunning = !!(this.runStartedAt || this.isStreaming || this.pendingToolCount > 0);
   const isTyping = this._lastTypingAt && Date.now() - this._lastTypingAt < 5000;
 
-  mascot.classList.remove('sleeping', 'working', 'looking-up', 'thinking');
+  mascot.classList.remove('sleeping', 'working', 'looking-up', 'thinking', 'awake');
   if (isRunning) {
     mascot.classList.add('working');
   } else if (isTyping) {
     mascot.classList.add('looking-up');
   } else {
-    mascot.classList.add('sleeping');
+    mascot.classList.add('awake');
   }
 };
 
@@ -150,9 +150,10 @@ sidePanelProto.updateThinkingPanel = function updateThinkingPanel(thinking: stri
           <div class="thinking-content-inline"></div>
         </div>
       `;
-      const firstChild = this.streamingState.eventsEl.firstChild;
-      if (firstChild) {
-        this.streamingState.eventsEl.insertBefore(thinkingBlock, firstChild);
+      // Insert before the first text event for interleaved display
+      const firstTextEvent = this.streamingState.eventsEl.querySelector(':scope > .stream-event-text');
+      if (firstTextEvent) {
+        this.streamingState.eventsEl.insertBefore(thinkingBlock, firstTextEvent);
       } else {
         this.streamingState.eventsEl.appendChild(thinkingBlock);
       }

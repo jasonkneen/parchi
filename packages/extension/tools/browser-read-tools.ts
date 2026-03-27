@@ -1,4 +1,49 @@
+import { EVALUATE_TOOL_MAX_SCRIPT_LENGTH, runPageScript, toJsonSafe } from './browser-eval-shared.js';
 import { type BrowserToolArgs, type BrowserToolsDelegate, missingSessionTabError } from './browser-tool-shared.js';
+
+export async function evaluateTool(ctx: BrowserToolsDelegate, args: BrowserToolArgs) {
+  const tabId = await ctx.resolveTabId(args);
+  if (!tabId) return missingSessionTabError();
+
+  const script = typeof args.script === 'string' ? args.script.trim() : '';
+  if (!script) {
+    return { success: false, error: 'Missing script parameter.' };
+  }
+  if (script.length > EVALUATE_TOOL_MAX_SCRIPT_LENGTH) {
+    return {
+      success: false,
+      error: `Script exceeds ${EVALUATE_TOOL_MAX_SCRIPT_LENGTH} characters.`,
+    };
+  }
+
+  const scriptArgs = Array.isArray(args.args) ? args.args : [];
+  await ctx.sendOverlay(tabId, {
+    label: 'Evaluate script',
+    note: script.slice(0, 60),
+    durationMs: 800,
+  });
+
+  const result = await ctx.runInTab(
+    tabId,
+    async (source: string, runtimeArgs: unknown[]) => {
+      try {
+        const value = await runPageScript(source, runtimeArgs);
+        return {
+          success: true,
+          result: toJsonSafe(value),
+        };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+    [script, scriptArgs] as const,
+  );
+
+  return result || { success: false, error: 'Script execution failed.' };
+}
 
 export async function getContentTool(ctx: BrowserToolsDelegate, args: BrowserToolArgs) {
   const tabId = await ctx.resolveTabId(args);

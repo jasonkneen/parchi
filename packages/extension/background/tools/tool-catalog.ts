@@ -1,5 +1,5 @@
 import type { ComposedSkill, ToolDefinition } from '@parchi/shared';
-import { getOrchestratorToolDefinitions } from './orchestrator-tool-definitions.js';
+import { getOrchestratorToolDefinitions } from './orchestrator/tool-definitions.js';
 
 type BrowserToolProvider = {
   getToolDefinitions(): ToolDefinition[];
@@ -71,6 +71,26 @@ export function getToolsForSession(
           },
         },
         required: ['step_index'],
+      },
+    },
+    {
+      name: 'create_file',
+      description:
+        'Create a downloadable file artifact for the user. Use this to output CSVs, JSON, text reports, markdown documents, or any structured data the user requested. The file will appear as a download card in the chat.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          filename: {
+            type: 'string',
+            description: 'File name with extension (e.g. "report.csv", "data.json", "summary.md")',
+          },
+          content: { type: 'string', description: 'File content as a string' },
+          mimeType: {
+            type: 'string',
+            description: 'MIME type (defaults to text/plain). Common: text/csv, application/json, text/markdown',
+          },
+        },
+        required: ['filename', 'content'],
       },
     },
     {

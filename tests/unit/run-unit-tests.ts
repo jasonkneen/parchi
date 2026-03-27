@@ -14,19 +14,40 @@ import { runCodexOauthConfigSuite } from './suites/codex-oauth-config.test.js';
 import { runConversationCompactionSuite } from './suites/conversation-compaction.test.js';
 import { runErrorHandlingSuite } from './suites/error-handling.test.js';
 import { runInputValidationSuite } from './suites/input-validation.test.js';
+import { runJsonRpcMutualExclusivitySuite } from './suites/json-rpc/mutual-exclusivity.test.js';
+import { runJsonRpcNotificationSuite } from './suites/json-rpc/notification.test.js';
+import { runJsonRpcRequestSuite } from './suites/json-rpc/request.test.js';
+import { runJsonRpcResponseSuite } from './suites/json-rpc/response.test.js';
 import { runMessageSchemaSuite } from './suites/message-schema.test.js';
 import { runMessageUtilsSuite } from './suites/message-utils.test.js';
 import { runModelListingSuite } from './suites/model-listing.test.js';
 import { runModelMessageConvertSuite } from './suites/model-message-convert.test.js';
 import { runOauthCandidatesSuite } from './suites/oauth-candidates.test.js';
 import { runOauthModelNormalizationSuite } from './suites/oauth-model-normalization.test.js';
+import { runOrchestratorNormalizationSuite } from './suites/orchestrator-normalization.test.js';
 import { runPanelSessionMemorySuite } from './suites/panel-session-memory.test.js';
 import { runPlanNormalizationSuite } from './suites/plan-normalization.test.js';
+import { runProfileCompatibilitySuite } from './suites/profile/compatibility.test.js';
+import { runConnectionGuardSuite } from './suites/profile/connection-guard.test.js';
+import { runCreateProfileSuite } from './suites/profile/create-profile.test.js';
+import { runExtractConnectionConfigSuite } from './suites/profile/extract-connection-config.test.js';
+import { runExtractFromProviderSuite } from './suites/profile/extract-from-provider.test.js';
+import { runResolveProfileSuite } from './suites/profile/resolve-profile.test.js';
+import { runVisionSettingsSuite } from './suites/profile/vision-settings.test.js';
+import { runProviderInstanceBaseTypeSuite } from './suites/provider-instance/base-type.test.js';
+import { runProviderInstanceFeaturesSuite } from './suites/provider-instance/features.test.js';
 import { runRecordingSummarySuite } from './suites/recording-summary.test.js';
 import { runReportImagesSuite } from './suites/report-images.test.js';
 import { runRetryHelpersSuite } from './suites/retry-helpers.test.js';
-import { runRuntimeMessagesSuite } from './suites/runtime-messages.test.js';
+import {
+  runRuntimeMessagesCoreSuite,
+  runRuntimeMessagesImagesSuite,
+  runRuntimeMessagesSessionSuite,
+  runRuntimeMessagesStreamingSuite,
+  runRuntimeMessagesValidationSuite,
+} from './suites/runtime-messages/index.js';
 import { runRuntimeProfileRoutingSuite } from './suites/runtime-profile-routing.test.js';
+import { runRuntimeTypesSuite } from './suites/runtime-types.test.js';
 import { runStatePersistenceSuite } from './suites/state-persistence.test.js';
 import { runThinkingExtractionSuite } from './suites/thinking-extraction.test.js';
 import { runToolDefinitionsSuite } from './suites/tool-definitions.test.js';
@@ -61,10 +82,29 @@ export function runUnitTests() {
   runRecordingSummarySuite(runner);
   runPanelSessionMemorySuite(runner);
   runPlanNormalizationSuite(runner);
+  runCreateProfileSuite(runner);
+  runResolveProfileSuite(runner);
+  runVisionSettingsSuite(runner);
+  runExtractConnectionConfigSuite(runner);
+  runExtractFromProviderSuite(runner);
+  runConnectionGuardSuite(runner);
+  runProfileCompatibilitySuite(runner);
+  runProviderInstanceBaseTypeSuite(runner);
+  runProviderInstanceFeaturesSuite(runner);
   runRetryHelpersSuite(runner);
-  runRuntimeMessagesSuite(runner);
+  runRuntimeMessagesCoreSuite(runner);
+  runRuntimeMessagesValidationSuite(runner);
+  runRuntimeMessagesStreamingSuite(runner);
+  runRuntimeMessagesImagesSuite(runner);
+  runRuntimeMessagesSessionSuite(runner);
+  runRuntimeTypesSuite(runner);
   runStatePersistenceSuite(runner);
   runXmlToolParserSuite(runner);
+  runOrchestratorNormalizationSuite(runner);
+  runJsonRpcRequestSuite(runner);
+  runJsonRpcNotificationSuite(runner);
+  runJsonRpcResponseSuite(runner);
+  runJsonRpcMutualExclusivitySuite(runner);
 
   return runner.printSummary();
 }

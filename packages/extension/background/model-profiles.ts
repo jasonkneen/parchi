@@ -1,12 +1,12 @@
-import { normalizeOpenRouterModelId } from '../ai/sdk-client.js';
+import { normalizeOpenRouterModelId } from '../ai/sdk/index.js';
 import { invalidateRuntimeAuthSession, isUsableRuntimeJwt, refreshRuntimeAuthSession } from '../convex/client.js';
-import { materializeProfileWithProvider } from '../state/provider-registry.js';
 import {
   getAccessToken as getOAuthAccessToken,
   getApiBaseUrl as getOAuthApiBaseUrl,
   getProviderConfig as getOAuthProviderConfig,
 } from '../oauth/manager.js';
 import type { OAuthProviderKey } from '../oauth/types.js';
+import { materializeProfileWithProvider } from '../state/provider-registry.js';
 
 export function hasOwnApiKey(profile: Record<string, any> | null | undefined) {
   return Boolean(String(profile?.apiKey || '').trim());
@@ -46,12 +46,9 @@ export function normalizeProxyModelId(provider: string, modelId: string) {
 export function hasActivePaidSubscription(settings: Record<string, any> = {}) {
   const mode = String(settings.accountModeChoice || '').toLowerCase();
   if (mode !== 'paid') return false;
-  // Support both legacy subscriptions AND prepaid credits
-  const hasCredits = Number(settings.convexCreditBalanceCents || 0) > 0;
   const status = String(settings.convexSubscriptionStatus || '').toLowerCase();
   const plan = String(settings.convexSubscriptionPlan || '').toLowerCase();
-  const hasLegacySub = plan === 'pro' && status === 'active';
-  return hasCredits || hasLegacySub;
+  return plan === 'pro' && status === 'active';
 }
 
 export function resolveConvexProxyBaseUrl(settings: Record<string, any> = {}) {
@@ -155,7 +152,7 @@ export function resolveRuntimeModelProfile(profile: Record<string, any>, setting
       allowed: false,
       route: 'none',
       profile,
-      errorMessage: 'No access configured. Add your own API key in Setup, or buy credits in Account & Billing.',
+      errorMessage: 'No access configured. Add your own API key in Setup, or start billing in Account & Billing.',
     };
   }
   if (!canUseConvexProxy(settings)) {
